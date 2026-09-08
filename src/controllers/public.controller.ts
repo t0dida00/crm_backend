@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import prisma from "../config/prisma";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { verifyTableToken } from "../lib/table-token";
+import { emitToPlatform } from "../realtime/socket";
 
 const DEFAULT_CURRENCY_SYMBOL = "€";
 const CODE_TO_SYMBOL: Record<string, string> = { EUR: "€", USD: "$", GBP: "£" };
@@ -166,5 +167,6 @@ export async function createTableRequest(req: Request, res: Response) {
     },
   });
 
+  emitToPlatform(platformId, "table_request:created", { request });
   return res.status(201).json({ request });
 }

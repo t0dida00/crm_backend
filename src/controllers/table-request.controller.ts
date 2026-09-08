@@ -2,6 +2,7 @@ import { Response } from "express";
 import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
+import { emitToPlatform } from "../realtime/socket";
 
 export async function createTableRequest(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
@@ -35,6 +36,7 @@ export async function createTableRequest(req: AuthedRequest, res: Response) {
     },
   });
 
+  emitToPlatform(platformId, "table_request:created", { request });
   return res.status(201).json({ request });
 }
 
@@ -72,5 +74,6 @@ export async function resolveTableRequest(req: AuthedRequest, res: Response) {
   });
 
   const request = await prisma.table_requests.findUnique({ where: { id } });
+  emitToPlatform(platformId, "table_request:resolved", { request });
   return res.status(200).json({ request });
 }

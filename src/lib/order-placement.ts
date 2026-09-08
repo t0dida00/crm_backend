@@ -1,4 +1,5 @@
 import prisma from "../config/prisma";
+import { emitToPlatform } from "../realtime/socket";
 
 interface OrderLineInput {
   itemId: string;
@@ -111,6 +112,7 @@ export async function placeOrderForTable(
           include: { order_lines: true },
         });
       });
+      emitToPlatform(platformId, "order:created", { order });
       return { order, created: true };
     } catch (err) {
       const isUniqueCodeConflict =

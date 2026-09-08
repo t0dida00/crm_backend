@@ -3,6 +3,7 @@ import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { AuthedRequest } from "../middleware/auth.middleware";
+import { emitToPlatform } from "../realtime/socket";
 
 export async function listOrders(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
@@ -74,6 +75,7 @@ export async function updateOrderStatus(req: AuthedRequest, res: Response) {
     },
     include: { order_lines: true },
   });
+  emitToPlatform(platformId, "order:updated", { order });
   return res.status(200).json({ order });
 }
 
@@ -116,6 +118,7 @@ export async function addOrderLine(req: AuthedRequest, res: Response) {
     });
   });
 
+  emitToPlatform(platformId, "order:updated", { order });
   return res.status(200).json({ order });
 }
 
@@ -150,6 +153,7 @@ export async function setOrderLineQty(req: AuthedRequest, res: Response) {
     });
   });
 
+  emitToPlatform(platformId, "order:updated", { order: updated });
   return res.status(200).json({ order: updated });
 }
 
@@ -162,5 +166,6 @@ export async function deleteOrder(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Order not found" });
 
   await prisma.orders.delete({ where: { id } });
+  emitToPlatform(platformId, "order:deleted", { id });
   return res.status(204).send();
 }

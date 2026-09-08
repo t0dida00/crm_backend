@@ -3,6 +3,7 @@ import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
 import { signTableToken } from "../lib/table-token";
 import { AuthedRequest } from "../middleware/auth.middleware";
+import { emitToPlatform } from "../realtime/socket";
 
 export async function listTables(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
@@ -105,6 +106,7 @@ export async function seatTable(req: AuthedRequest, res: Response) {
     where: { id },
     data: { state: "Seated", seated_at: new Date() },
   });
+  emitToPlatform(platformId, "table:updated", { table });
   return res.status(200).json({ table });
 }
 
@@ -126,6 +128,11 @@ export async function checkoutTable(req: AuthedRequest, res: Response) {
       data: { state: "Finished", seated_at: null },
     });
   });
+  // updateMany doesn't return rows, and listeners (staff panels, the guest's
+  // order-history view) only need to know this table's open orders are now
+  // closed — not each order's full new state.
+  emitToPlatform(platformId, "table:checked_out", { tableId: id, tableName: table.name });
+  emitToPlatform(platformId, "table:updated", { table });
   return res.status(200).json({ table });
 }
 
@@ -147,5 +154,6 @@ export async function freeTable(req: AuthedRequest, res: Response) {
       data: { state: "Free", seated_at: null },
     });
   });
+  emitToPlatform(platformId, "table:updated", { table });
   return res.status(200).json({ table });
 }
