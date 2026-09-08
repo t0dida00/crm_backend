@@ -4,6 +4,7 @@ import {
   createTable,
   deleteTable,
   freeTable,
+  listTableQrTokens,
   listTables,
   seatTable,
   updateTable,
@@ -13,6 +14,7 @@ import { requireAuth } from "../middleware/auth.middleware";
 const router = Router();
 
 router.get("/tables", requireAuth, listTables);
+router.get("/tables/qr-tokens", requireAuth, listTableQrTokens);
 router.post("/tables", requireAuth, createTable);
 router.patch("/tables/:id", requireAuth, updateTable);
 router.delete("/tables/:id", requireAuth, deleteTable);

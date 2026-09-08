@@ -154,6 +154,10 @@ model orders {
   code        String        @db.VarChar(30)
   table_name  String        @db.VarChar(100)
   total       Decimal       @default(0) @db.Decimal(12, 2)
+  // Snapshot of the platform's common tax rate at the moment this order was
+  // created — later admin changes to settings must never alter how a past
+  // order's Net/Tax breakdown displays.
+  tax_rate    Decimal       @default(0) @db.Decimal(5, 2)
   status      String        @db.VarChar(20)
   ts          DateTime      @default(now()) @db.Timestamptz(6)
   closed_ts   DateTime?     @db.Timestamptz(6)

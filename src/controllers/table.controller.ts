@@ -1,6 +1,7 @@
 import { Response } from "express";
 import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
+import { signTableToken } from "../lib/table-token";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
 export async function listTables(req: AuthedRequest, res: Response) {
@@ -12,6 +13,23 @@ export async function listTables(req: AuthedRequest, res: Response) {
     orderBy: { name: "asc" },
   });
   return res.status(200).json({ tables });
+}
+
+export async function listTableQrTokens(req: AuthedRequest, res: Response) {
+  const platformId = await resolvePlatformId(req.userId as string);
+  if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+
+  const tables = await prisma.tables.findMany({
+    where: { platform_id: platformId },
+    orderBy: { name: "asc" },
+  });
+
+  const tokens = tables.map((t) => ({
+    tableId: t.id,
+    tableName: t.name,
+    token: signTableToken(platformId, t.id),
+  }));
+  return res.status(200).json({ tokens });
 }
 
 export async function createTable(req: AuthedRequest, res: Response) {

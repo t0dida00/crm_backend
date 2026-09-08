@@ -1,6 +1,7 @@
 import { Response } from "express";
 import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
+import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
 export async function listOrders(req: AuthedRequest, res: Response) {
@@ -32,96 +33,20 @@ export async function getOrder(req: AuthedRequest, res: Response) {
   return res.status(200).json({ order });
 }
 
-interface OrderLineInput {
-  itemId: string;
-  qty: number;
-  note?: string;
-}
-
 export async function createOrder(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
 
   const { tableName, status, lines } = req.body ?? {};
-  if (typeof tableName !== "string" || !tableName.trim()) {
-    return res.status(400).json({ error: "tableName is required" });
-  }
-  if (typeof status !== "string" || !status.trim()) {
-    return res.status(400).json({ error: "status is required" });
-  }
-  if (!Array.isArray(lines) || lines.length === 0) {
-    return res.status(400).json({ error: "lines must be a non-empty array" });
-  }
-
-  const table = await prisma.tables.findFirst({
-    where: { platform_id: platformId, name: tableName.trim() },
-  });
-
-  const dishIds = (lines as OrderLineInput[]).map((l) => l.itemId);
-  const dishes = await prisma.menu_items.findMany({
-    where: { id: { in: dishIds }, platform_id: platformId },
-  });
-  const dishById = new Map(dishes.map((d) => [d.id, d]));
-
-  const resolvedLines = (lines as OrderLineInput[])
-    .map((line) => {
-      const dish = dishById.get(line.itemId);
-      if (!dish || typeof line.qty !== "number" || line.qty <= 0) return null;
-      return {
-        item_id: dish.id,
-        name: dish.name,
-        price: dish.price,
-        qty: line.qty,
-        note: typeof line.note === "string" ? line.note : null,
-      };
-    })
-    .filter((l): l is NonNullable<typeof l> => l !== null);
-
-  if (resolvedLines.length === 0) {
-    return res.status(400).json({ error: "No valid order lines" });
-  }
-
-  const total = resolvedLines.reduce((sum, l) => sum + Number(l.price) * l.qty, 0);
-
-  // Order codes are sequential per platform but rows can be deleted, so a plain row
-  // count can collide with a still-existing higher code — derive the next number from
-  // the highest existing code instead, and retry on a rare concurrent-create race.
-  const MAX_ATTEMPTS = 5;
-  let order;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    try {
-      order = await prisma.$transaction(async (tx) => {
-        const existingCodes = await tx.orders.findMany({
-          where: { platform_id: platformId },
-          select: { code: true },
-        });
-        const maxNumber = existingCodes.reduce((max, o) => {
-          const n = Number(o.code.replace(/^ORD-/, ""));
-          return Number.isFinite(n) && n > max ? n : max;
-        }, 2400);
-
-        return tx.orders.create({
-          data: {
-            platform_id: platformId,
-            table_id: table?.id ?? null,
-            table_name: tableName.trim(),
-            code: `ORD-${maxNumber + 1}`,
-            status: status.trim(),
-            total,
-            order_lines: { create: resolvedLines },
-          },
-          include: { order_lines: true },
-        });
-      });
-      break;
-    } catch (err) {
-      const isUniqueCodeConflict =
-        err instanceof Error && "code" in err && (err as { code?: string }).code === "P2002";
-      if (!isUniqueCodeConflict || attempt === MAX_ATTEMPTS - 1) throw err;
+  try {
+    const { order, created } = await placeOrderForTable(platformId, tableName, status, lines ?? []);
+    return res.status(created ? 201 : 200).json({ order });
+  } catch (err) {
+    if (err instanceof OrderPlacementError) {
+      return res.status(err.status).json({ error: err.message });
     }
+    throw err;
   }
-
-  return res.status(201).json({ order });
 }
 
 export async function updateOrderStatus(req: AuthedRequest, res: Response) {
