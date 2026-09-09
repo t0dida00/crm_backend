@@ -8,7 +8,8 @@
 # env
 .env
 .env.*
-!.env.example
+!.env.local.example
+!.env.development.example
 
 # logs
 npm-debug.log*
