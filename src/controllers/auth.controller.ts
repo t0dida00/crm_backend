@@ -26,12 +26,17 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
+  const platformUser = await prisma.platform_users.findUnique({
+    where: { user_id: user.id },
+  });
+  const role = platformUser?.is_active ? platformUser.role : null;
+
+  const token = jwt.sign({ sub: user.id, email: user.email, role }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
 
   return res.status(200).json({
     token,
-    user: { id: user.id, email: user.email, full_name: user.full_name },
+    user: { id: user.id, email: user.email, full_name: user.full_name, role },
   });
 }
