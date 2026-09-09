@@ -29,7 +29,18 @@ export async function login(req: Request, res: Response) {
   const platformUser = await prisma.platform_users.findUnique({
     where: { user_id: user.id },
   });
-  const role = platformUser?.is_active ? platformUser.role : null;
+
+  // A platform_users row that exists but is inactive means an owner
+  // disabled this account — distinct from having no platform at all (a
+  // new user who should be allowed to proceed to workspace setup).
+  if (platformUser && !platformUser.is_active) {
+    return res.status(403).json({
+      error: "ACCOUNT_DISABLED",
+      message: "Your account is disabled temporarily. Please contact your owner(s).",
+    });
+  }
+
+  const role = platformUser?.role ?? null;
 
   const token = jwt.sign({ sub: user.id, email: user.email, role }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,

@@ -15,11 +15,12 @@ const toStaffRecord = (pu: {
   role: string;
   is_active: boolean;
   created_at: Date;
-  users: { id: string; email: string | null; full_name: string; is_active: boolean };
+  users: { id: string; email: string | null; phone: string | null; full_name: string; is_active: boolean };
 }) => ({
   id: pu.id,
   userId: pu.users.id,
   email: pu.users.email,
+  phone: pu.users.phone,
   fullName: pu.users.full_name,
   role: pu.role,
   isActive: pu.is_active,
@@ -43,7 +44,7 @@ export async function createStaff(req: AuthedRequest, res: Response) {
   const membership = await requireOwner(req);
   if (!membership) return res.status(403).json({ error: "Owner access required" });
 
-  const { email, password, fullName } = req.body ?? {};
+  const { email, password, fullName, phone } = req.body ?? {};
   if (typeof email !== "string" || !email.trim()) {
     return res.status(400).json({ error: "email is required" });
   }
@@ -52,6 +53,9 @@ export async function createStaff(req: AuthedRequest, res: Response) {
   }
   if (typeof fullName !== "string" || !fullName.trim()) {
     return res.status(400).json({ error: "fullName is required" });
+  }
+  if (phone !== undefined && typeof phone !== "string") {
+    return res.status(400).json({ error: "phone must be a string" });
   }
 
   const existing = await prisma.user.findFirst({
@@ -64,7 +68,13 @@ export async function createStaff(req: AuthedRequest, res: Response) {
   const password_hash = await bcrypt.hash(password, 10);
   const result = await prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
-      data: { email: email.trim(), password_hash, full_name: fullName.trim(), is_active: true },
+      data: {
+        email: email.trim(),
+        password_hash,
+        full_name: fullName.trim(),
+        phone: typeof phone === "string" && phone.trim() ? phone.trim() : null,
+        is_active: true,
+      },
     });
     return tx.platform_users.create({
       data: { platform_id: membership.platformId, user_id: user.id, role: "STAFF", is_active: true },
@@ -86,12 +96,15 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
   });
   if (!existing) return res.status(404).json({ error: "Staff account not found" });
 
-  const { fullName, email, password, isActive } = req.body ?? {};
+  const { fullName, email, phone, password, isActive } = req.body ?? {};
   if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) {
     return res.status(400).json({ error: "fullName cannot be empty" });
   }
   if (email !== undefined && (typeof email !== "string" || !email.trim())) {
     return res.status(400).json({ error: "email cannot be empty" });
+  }
+  if (phone !== undefined && typeof phone !== "string") {
+    return res.status(400).json({ error: "phone must be a string" });
   }
   if (password !== undefined && (typeof password !== "string" || password.length < 8)) {
     return res.status(400).json({ error: "password must be at least 8 characters" });
@@ -113,6 +126,7 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
       data: {
         ...(typeof fullName === "string" ? { full_name: fullName.trim() } : {}),
         ...(typeof email === "string" ? { email: email.trim() } : {}),
+        ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
         ...(typeof password === "string" ? { password_hash: await bcrypt.hash(password, 10) } : {}),
       },
     });
