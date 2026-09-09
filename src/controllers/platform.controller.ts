@@ -90,6 +90,6 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
     },
   });
 
-  emitToPlatform(platform.id, "platform:updated", { platform });
+  await emitToPlatform(platform.id, "platform:updated", { platform });
   return res.status(200).json({ platform });
 }

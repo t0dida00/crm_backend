@@ -21,14 +21,20 @@ const platformChannel = (platformId: string) => `platform-${platformId}`;
 
 /** Publishes an event to every client (staff and guest) subscribed to a
  * platform's channel. Call this after any write that other sessions should
- * see live. A Vercel serverless function can't hold a persistent socket
- * connection the way Socket.IO needs, so Pusher's REST-based publish (no
- * long-lived connection required server-side) replaces it here — the
- * frontend subscribes with pusher-js instead of connecting a raw socket. */
-export function emitToPlatform(platformId: string, event: string, payload: unknown) {
+ * see live, and always `await` it before the response is sent — Vercel can
+ * freeze a serverless function immediately after it responds, so a
+ * fire-and-forget trigger() call can get killed mid-flight before it ever
+ * reaches Pusher (this doesn't show up locally, where the Node process
+ * keeps running regardless). A Vercel serverless function can't hold a
+ * persistent socket connection the way Socket.IO needs either, which is why
+ * this is a REST-based publish (no long-lived connection required
+ * server-side) rather than a socket.io room broadcast. */
+export async function emitToPlatform(platformId: string, event: string, payload: unknown) {
   const client = getPusher();
   if (!client) return;
-  client.trigger(platformChannel(platformId), event, payload).catch((err) => {
+  try {
+    await client.trigger(platformChannel(platformId), event, payload);
+  } catch (err) {
     console.error("Pusher trigger failed:", err);
-  });
+  }
 }

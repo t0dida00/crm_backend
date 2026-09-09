@@ -112,7 +112,7 @@ export async function placeOrderForTable(
           include: { order_lines: true },
         });
       });
-      emitToPlatform(platformId, "order:created", { order });
+      await emitToPlatform(platformId, "order:created", { order });
       return { order, created: true };
     } catch (err) {
       const isUniqueCodeConflict =

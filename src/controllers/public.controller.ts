@@ -167,6 +167,6 @@ export async function createTableRequest(req: Request, res: Response) {
     },
   });
 
-  emitToPlatform(platformId, "table_request:created", { request });
+  await emitToPlatform(platformId, "table_request:created", { request });
   return res.status(201).json({ request });
 }

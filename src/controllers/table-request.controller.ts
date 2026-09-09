@@ -36,7 +36,7 @@ export async function createTableRequest(req: AuthedRequest, res: Response) {
     },
   });
 
-  emitToPlatform(platformId, "table_request:created", { request });
+  await emitToPlatform(platformId, "table_request:created", { request });
   return res.status(201).json({ request });
 }
 
@@ -74,6 +74,6 @@ export async function resolveTableRequest(req: AuthedRequest, res: Response) {
   });
 
   const request = await prisma.table_requests.findUnique({ where: { id } });
-  emitToPlatform(platformId, "table_request:resolved", { request });
+  await emitToPlatform(platformId, "table_request:resolved", { request });
   return res.status(200).json({ request });
 }
