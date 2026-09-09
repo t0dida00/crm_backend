@@ -11,6 +11,7 @@ import bookingRoutes from "./routes/booking.routes";
 import settingsRoutes from "./routes/settings.routes";
 import publicRoutes from "./routes/public.routes";
 import tableRequestRoutes from "./routes/table-request.routes";
+import staffRoutes from "./routes/staff.routes";
 
 const app: Application = express();
 
@@ -27,6 +28,7 @@ app.use("/", orderRoutes);
 app.use("/", bookingRoutes);
 app.use("/", settingsRoutes);
 app.use("/", tableRequestRoutes);
+app.use("/", staffRoutes);
 app.use("/public", publicRoutes);
 
 export default app;
