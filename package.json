@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "postinstall": "prisma generate",
     "start": "node dist/server.js",
     "lint": "eslint src --ext .ts",
     "prisma:migrate": "prisma migrate dev",
