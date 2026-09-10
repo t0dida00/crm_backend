@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum DishStatus {
+  valid
+  sold_out
+  hidden
+}
+
 model User {
   id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email          String?         @db.VarChar(255)
@@ -46,7 +52,7 @@ model menu_items {
   tax_pct         Decimal?         @db.Decimal(5, 2)
   image_url       String?
   is_vegan        Boolean          @default(false)
-  is_available    Boolean          @default(true)
+  status          DishStatus       @default(valid)
   created_at      DateTime         @default(now()) @db.Timestamptz(6)
   updated_at      DateTime         @default(now()) @db.Timestamptz(6)
   note            String?

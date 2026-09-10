@@ -44,7 +44,12 @@ export async function placeOrderForTable(
 
   const dishIds = lines.map((l) => l.itemId);
   const dishes = await prisma.menu_items.findMany({
-    where: { id: { in: dishIds }, platform_id: platformId, is_available: true },
+    where: {
+      id: { in: dishIds },
+      platform_id: platformId,
+      status: "valid",
+      OR: [{ category_id: null }, { menu_categories: { is_active: true } }],
+    },
   });
   const dishById = new Map(dishes.map((d) => [d.id, d]));
 

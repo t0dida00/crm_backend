@@ -19,16 +19,19 @@ export async function getPublicMenu(req: Request, res: Response) {
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
 
-  const [categories, dishes] = await Promise.all([
-    prisma.menu_categories.findMany({
-      where: { platform_id: platformId, is_active: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.menu_items.findMany({
-      where: { platform_id: platformId, is_available: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
+  const categories = await prisma.menu_categories.findMany({
+    where: { platform_id: platformId, is_active: true },
+    orderBy: { name: "asc" },
+  });
+
+  const dishes = await prisma.menu_items.findMany({
+    where: {
+      platform_id: platformId,
+      status: { in: ["valid", "sold_out"] },
+      category_id: { in: categories.map((c) => c.id) },
+    },
+    orderBy: { name: "asc" },
+  });
 
   return res.status(200).json({ categories, dishes });
 }

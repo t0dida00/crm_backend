@@ -57,12 +57,12 @@ export async function deleteCategory(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Category not found" });
 
   // Dishes may be referenced by historical order_lines (NoAction FK), so soft-delete
-  // them (is_available=false, category_id cleared) instead of a hard delete — mirrors
+  // them (status="hidden", category_id cleared) instead of a hard delete — mirrors
   // the dish DELETE endpoint and unblocks the category FK.
   await prisma.$transaction([
     prisma.menu_items.updateMany({
       where: { category_id: id },
-      data: { is_available: false, category_id: null },
+      data: { status: "hidden", category_id: null },
     }),
     prisma.menu_categories.delete({ where: { id } }),
   ]);
