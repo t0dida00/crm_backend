@@ -42,6 +42,36 @@ export async function placeOrderForTable(
     where: { platform_id: platformId, name: tableName.trim() },
   });
 
+  // Every order belongs to the table's currently-open session — the first
+  // order since the last checkout starts a new one. A partial unique index
+  // (one_open_session_per_table) is the source of truth for that invariant;
+  // on a rare concurrent-order race where two requests both try to open a
+  // session, the loser's insert violates it and we just re-read the winner's row.
+  let sessionId: string | null = null;
+  if (table) {
+    const openSession = await prisma.table_sessions.findFirst({
+      where: { table_id: table.id, closed_at: null },
+    });
+    if (openSession) {
+      sessionId = openSession.id;
+    } else {
+      try {
+        const created = await prisma.table_sessions.create({
+          data: { platform_id: platformId, table_id: table.id, table_name: table.name },
+        });
+        sessionId = created.id;
+      } catch (err) {
+        const isUniqueConflict =
+          err instanceof Error && "code" in err && (err as { code?: string }).code === "P2002";
+        if (!isUniqueConflict) throw err;
+        const winner = await prisma.table_sessions.findFirst({
+          where: { table_id: table.id, closed_at: null },
+        });
+        sessionId = winner?.id ?? null;
+      }
+    }
+  }
+
   const dishIds = lines.map((l) => l.itemId);
   const dishes = await prisma.menu_items.findMany({
     where: {
@@ -107,6 +137,7 @@ export async function placeOrderForTable(
           data: {
             platform_id: platformId,
             table_id: table?.id ?? null,
+            session_id: sessionId,
             table_name: tableName.trim(),
             code: `ORD-${maxNumber + 1}`,
             status: status.trim(),
@@ -116,7 +147,7 @@ export async function placeOrderForTable(
           },
           include: { order_lines: true },
         });
-      });
+      }, { timeout: 15000 });
       await emitToPlatform(platformId, "order:created", { order });
       return { order, created: true };
     } catch (err) {

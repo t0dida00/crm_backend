@@ -119,15 +119,22 @@ export async function checkoutTable(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
   const table = await prisma.$transaction(async (tx) => {
+    const closedAt = new Date();
     await tx.orders.updateMany({
       where: { table_id: id, closed_ts: null },
-      data: { status: "Paid", closed_ts: new Date() },
+      data: { status: "Paid", closed_ts: closedAt },
+    });
+    // Closing the session is what actually ends this dining party — the next
+    // order placed at this table (once it's re-seated) opens a fresh one.
+    await tx.table_sessions.updateMany({
+      where: { table_id: id, closed_at: null },
+      data: { closed_at: closedAt },
     });
     return tx.tables.update({
       where: { id },
       data: { state: "Finished", seated_at: null },
     });
-  });
+  }, { timeout: 15000 });
   // updateMany doesn't return rows, and listeners (staff panels, the guest's
   // order-history view) only need to know this table's open orders are now
   // closed — not each order's full new state.
