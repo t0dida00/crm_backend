@@ -64,6 +64,7 @@ export async function getPublicSettings(req: Request, res: Response) {
       name: platform.name,
       address: platform.address,
       phone: platform.phone,
+      logoUrl: platform.logo_url,
       currency: toSymbol(preferences?.currency ?? DEFAULT_CURRENCY_SYMBOL),
       taxRate: preferences?.common_tax_rate ?? 0,
     },

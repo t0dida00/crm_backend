@@ -20,7 +20,7 @@ export async function getMyPlatform(req: AuthedRequest, res: Response) {
 }
 
 export async function createPlatform(req: AuthedRequest, res: Response) {
-  const { name, platformTypeCode, phone, email, address } = req.body ?? {};
+  const { name, platformTypeCode, phone, email, address, logoUrl } = req.body ?? {};
 
   if (typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Name is required" });
@@ -51,6 +51,7 @@ export async function createPlatform(req: AuthedRequest, res: Response) {
         phone: phone || null,
         email: email || null,
         address: address || null,
+        logo_url: logoUrl || null,
       },
     });
 
@@ -76,7 +77,7 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
     return res.status(404).json({ error: "No platform found for this user" });
   }
 
-  const { name, phone, address } = req.body ?? {};
+  const { name, phone, address, logoUrl } = req.body ?? {};
   if (name !== undefined && (typeof name !== "string" || !name.trim())) {
     return res.status(400).json({ error: "name cannot be empty" });
   }
@@ -87,6 +88,7 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
       ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
       ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
       ...(typeof address === "string" ? { address: address.trim() || null } : {}),
+      ...(typeof logoUrl === "string" ? { logo_url: logoUrl.trim() || null } : {}),
     },
   });
 
