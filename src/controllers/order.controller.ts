@@ -50,7 +50,8 @@ function parseTimestamp(value: unknown): Date | null {
  * uses: closed orders collapse by `session_id` (or stand alone when they have
  * none), and with `status=all` each open order is its own entry too. Entries are
  * sorted newest first by their latest order `ts`; `q` matches order code or table
- * name. Paging happens in SQL so a platform's history never loads in full.
+ * name; `from` (epoch ms) keeps only orders checked out since then (open orders,
+ * with `status=all`, by when they were placed). Paging happens in SQL so a platform's history never loads in full.
  */
 export async function listOrderHistory(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
@@ -61,6 +62,7 @@ export async function listOrderHistory(req: AuthedRequest, res: Response) {
   const includeOpen = req.query.status === "all";
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const from = parseTimestamp(req.query.from);
 
   const sessionKey = Prisma.sql`CASE WHEN closed_ts IS NULL THEN id ELSE COALESCE(session_id, id) END`;
   const filters = Prisma.join(
@@ -68,6 +70,9 @@ export async function listOrderHistory(req: AuthedRequest, res: Response) {
       Prisma.sql`platform_id = ${platformId}::uuid`,
       ...(includeOpen ? [] : [Prisma.sql`closed_ts IS NOT NULL`]),
       ...(q ? [Prisma.sql`(code ILIKE ${pattern} OR table_name ILIKE ${pattern})`] : []),
+      ...(from
+        ? [includeOpen ? Prisma.sql`COALESCE(closed_ts, ts) >= ${from}` : Prisma.sql`closed_ts >= ${from}`]
+        : []),
     ],
     " AND ",
   );

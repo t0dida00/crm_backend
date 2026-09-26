@@ -192,6 +192,32 @@ describe('Order Controller - Intensive Tests', () => {
       ]);
     });
 
+    test('should only include sessions checked out since `from`', async () => {
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ total: BigInt(0) }]);
+      const from = Date.UTC(2026, 8, 25);
+      mockRequest.query = { from: String(from) };
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      const filters = (prisma.$queryRaw as jest.Mock).mock.calls[0][2];
+      expect(filters.sql).toContain('closed_ts >= ?');
+      expect(filters.values).toContainEqual(new Date(from));
+    });
+
+    test('should ignore an invalid `from`', async () => {
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ total: BigInt(0) }]);
+      mockRequest.query = { from: 'yesterday' };
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      const filters = (prisma.$queryRaw as jest.Mock).mock.calls[0][2];
+      expect(filters.sql).not.toContain('>=');
+    });
+
     test('should return 404 if no platform found', async () => {
       (platformContext.resolvePlatformId as jest.Mock).mockResolvedValue(null);
 
