@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 import {
+  getOrderSeries,
   getOrderStats,
   listOrderHistory,
   listOrders,
@@ -243,6 +244,58 @@ describe('Order Controller - Intensive Tests', () => {
         expect.objectContaining({ where: { platform_id: 'platform-123' } }),
       );
       expect(jsonMock.mock.calls[0][0]).toMatchObject({ orderCount: 0, takings: 0, oldestTs: null });
+    });
+  });
+
+  describe('Order Series', () => {
+    test('should return bucketed orders and takings as numbers', async () => {
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([
+        { bucket: '2026-09-26T09', orders: BigInt(3), takings: 36 },
+      ]);
+      mockRequest.query = { bucket: 'hour', from: '1000', to: '2000', tz: 'Europe/Madrid' };
+
+      await getOrderSeries(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(statusMock).toHaveBeenCalledWith(200);
+      expect(jsonMock).toHaveBeenCalledWith({
+        series: [{ bucket: '2026-09-26T09', orders: 3, takings: 36 }],
+      });
+    });
+
+    test('should accept year buckets', async () => {
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([
+        { bucket: '2025-01-01T00', orders: BigInt(10), takings: 120 },
+      ]);
+      mockRequest.query = { bucket: 'year', from: '1000', to: '2000', tz: 'UTC' };
+
+      await getOrderSeries(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(jsonMock).toHaveBeenCalledWith({
+        series: [{ bucket: '2025-01-01T00', orders: 10, takings: 120 }],
+      });
+    });
+
+    test('should accept a time zone alias', async () => {
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
+      mockRequest.query = { bucket: 'day', from: '1000', to: '2000', tz: 'Asia/Ho_Chi_Minh' };
+
+      await getOrderSeries(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(statusMock).toHaveBeenCalledWith(200);
+    });
+
+    test.each([
+      [{ bucket: 'week', from: '1', to: '2' }, 'bucket must be one of hour, day, month, year'],
+      [{ bucket: 'day', from: '1', to: '2', tz: 'Not/AZone' }, 'Unknown time zone'],
+      [{ bucket: 'day', from: '1' }, 'from and to are required'],
+    ])('should reject invalid params %j', async (query, error) => {
+      mockRequest.query = query;
+
+      await getOrderSeries(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(statusMock).toHaveBeenCalledWith(400);
+      expect(jsonMock).toHaveBeenCalledWith({ error });
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
     });
   });
 

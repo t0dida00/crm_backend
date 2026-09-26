@@ -4,6 +4,7 @@ import {
   createOrder,
   deleteOrder,
   getOrder,
+  getOrderSeries,
   getOrderStats,
   listOrderHistory,
   listOrders,
@@ -18,6 +19,7 @@ router.get("/orders", requireAuth, listOrders);
 // Registered before /orders/:id so "history"/"stats" aren't captured as an id.
 router.get("/orders/history", requireAuth, listOrderHistory);
 router.get("/orders/stats", requireAuth, getOrderStats);
+router.get("/orders/stats/series", requireAuth, getOrderSeries);
 router.get("/orders/:id", requireAuth, getOrder);
 router.post("/orders", requireAuth, createOrder);
 router.patch("/orders/:id/status", requireAuth, updateOrderStatus);

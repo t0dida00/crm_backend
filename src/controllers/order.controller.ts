@@ -163,6 +163,51 @@ export async function getOrderStats(req: AuthedRequest, res: Response) {
   });
 }
 
+const SERIES_BUCKETS = new Set(["hour", "day", "month", "year"]);
+function isTimeZone(tz: string) {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Orders and takings per hour/day/month/year for the dashboard chart. Buckets are
+ * computed in the caller's time zone (`tz`, IANA name) so "9:00" or "Mon" match
+ * the viewer's clock; each bucket key is a local timestamp truncated to the
+ * bucket, formatted `YYYY-MM-DDTHH`. Empty buckets are omitted.
+ */
+export async function getOrderSeries(req: AuthedRequest, res: Response) {
+  const platformId = await resolvePlatformId(req.userId as string);
+  if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+
+  const bucket = typeof req.query.bucket === "string" ? req.query.bucket : "";
+  if (!SERIES_BUCKETS.has(bucket)) {
+    return res.status(400).json({ error: "bucket must be one of hour, day, month, year" });
+  }
+  const tz = typeof req.query.tz === "string" && req.query.tz ? req.query.tz : "UTC";
+  if (!isTimeZone(tz)) return res.status(400).json({ error: "Unknown time zone" });
+  const from = parseTimestamp(req.query.from);
+  const to = parseTimestamp(req.query.to);
+  if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+
+  const rows = await prisma.$queryRaw<{ bucket: string; orders: bigint; takings: Prisma.Decimal }[]>`
+    SELECT to_char(date_trunc(${bucket}, ts AT TIME ZONE ${tz}), 'YYYY-MM-DD"T"HH24') AS bucket,
+           COUNT(*) AS orders,
+           COALESCE(SUM(total), 0) AS takings
+    FROM orders
+    WHERE platform_id = ${platformId}::uuid AND ts >= ${from} AND ts <= ${to}
+    GROUP BY 1
+    ORDER BY 1
+  `;
+
+  return res.status(200).json({
+    series: rows.map((r) => ({ bucket: r.bucket, orders: Number(r.orders), takings: Number(r.takings) })),
+  });
+}
+
 export async function getOrder(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
