@@ -9,18 +9,105 @@ same order-placement logic.
 Stack: **Express 4 · Prisma 5 · PostgreSQL · JWT (jsonwebtoken) · Pusher
 Channels** (real-time), TypeScript throughout, run with `tsx`.
 
-## Install
+## Running locally
+
+There are two ways to run the API: with Docker (easiest, Postgres included)
+or directly with Node against a Postgres you provide.
+
+Either way, the seed creates a login you can use right away:
+**`admin@example.com` / `password123`**.
+
+### Option A — Docker Compose
+
+Requires Docker (Docker Desktop on macOS/Windows).
 
 ```bash
-npm install         # also runs `prisma generate` via postinstall
-cp .env.local.example .env.local
-# fill in DATABASE_URL, JWT_SECRET, PUSHER_* — see Environment below
-npm run prisma:migrate   # or: npx dotenv -e .env.local -- prisma db push
-npm run prisma:seed      # creates platform_types (RESTAURANT/CAFE) + admin@example.com / password123
-npm run dev
+git clone https://github.com/t0dida00/crm_backend.git
+cd crm_backend
+
+docker compose up -d --build        # starts Postgres (port 5432) and the API (port 3000)
+docker compose run --rm setup       # first run only: creates the tables and seeds data
+
+curl http://localhost:3000/health   # → {"status":"ok"}
 ```
 
-Server listens on `PORT` (default `3000`).
+Useful commands:
+
+```bash
+docker compose logs -f api          # follow API logs
+docker compose down                 # stop (data is kept in the pgdata volume)
+docker compose down -v              # stop and wipe the database
+```
+
+`JWT_SECRET` and the `PUSHER_*` variables can be overridden from your shell
+or a `.env` file next to `docker-compose.yml`. Without Pusher credentials the
+API still works; real-time events are simply not published.
+
+To build and run just the API image against an existing database:
+
+```bash
+docker build -t crm-backend .
+docker run -p 3000:3000 \
+  -e DATABASE_URL="postgresql://USER:PASSWORD@host.docker.internal:5432/crm_platform?schema=public" \
+  -e JWT_SECRET="change-me" \
+  crm-backend
+```
+
+### Option B — Node directly
+
+Requires **Node.js 20+** and a **PostgreSQL 14+** database.
+
+```bash
+git clone https://github.com/t0dida00/crm_backend.git
+cd crm_backend
+
+npm install                         # also runs `prisma generate` via postinstall
+cp .env.local.example .env.local    # then fill in DATABASE_URL and JWT_SECRET (see Environment)
+```
+
+Don't have Postgres? Start one in Docker:
+
+```bash
+docker run -d --name crm-postgres -p 5432:5432 \
+  -e POSTGRES_USER=crm -e POSTGRES_PASSWORD=crm -e POSTGRES_DB=crm_platform \
+  postgres:16-alpine
+# DATABASE_URL="postgresql://crm:crm@localhost:5432/crm_platform?schema=public"
+```
+
+Create the schema and seed data, then start the dev server:
+
+```bash
+npx dotenv -e .env.local -- prisma db push   # creates all tables from prisma/schema.prisma
+npm run prisma:seed                          # platform types + admin@example.com / password123
+npm run dev                                  # tsx watch, reloads on change
+```
+
+Server listens on `PORT` (default `3000`); check it with
+`curl http://localhost:3000/health`.
+
+> **Fresh database? Use `prisma db push`, not `prisma migrate`.** The
+> `prisma/migrations` folder only holds incremental changes on top of an
+> existing schema (there is no initial migration), so `npm run
+> prisma:migrate` fails against an empty database. Use it only on a database
+> that already has the base tables.
+
+### Production build
+
+```bash
+npm run build     # compiles src/ to dist/
+npm start         # node dist/server.js — reads env vars from the process environment
+```
+
+### Tests
+
+```bash
+npm test                # Jest + ts-jest, all tests
+npm run test:watch      # re-run on change
+npm run test:coverage   # writes a report to coverage/
+```
+
+The tests mock Prisma, bcrypt, JWT and Pusher, so they need no database or
+env file.
 
 ## Environment
 

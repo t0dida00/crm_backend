@@ -1,0 +1,52 @@
+# Local stack: Postgres + the API. Start with `docker compose up --build`,
+# then run the one-off `setup` service once to create tables and seed data.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: crm
+      POSTGRES_DB: crm_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://crm:crm@db:5432/crm_platform?schema=public
+      JWT_SECRET: ${JWT_SECRET:-local-dev-secret}
+      PUSHER_APP_ID: ${PUSHER_APP_ID:-}
+      PUSHER_KEY: ${PUSHER_KEY:-}
+      PUSHER_SECRET: ${PUSHER_SECRET:-}
+      PUSHER_CLUSTER: ${PUSHER_CLUSTER:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One-off: `docker compose run --rm setup` — pushes the Prisma schema to the
+  # database and seeds platform types + admin@example.com / password123.
+  # Uses the build stage because the prisma CLI and tsx are devDependencies.
+  setup:
+    build:
+      context: .
+      target: build
+    environment:
+      DATABASE_URL: postgresql://crm:crm@db:5432/crm_platform?schema=public
+    command: sh -c "npx prisma db push --skip-generate && npx prisma db seed"
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["setup"]
+
+volumes:
+  pgdata:
