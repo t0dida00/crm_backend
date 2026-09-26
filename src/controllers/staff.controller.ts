@@ -1,10 +1,17 @@
 import { Response } from "express";
+import { randomUUID } from "crypto";
 import bcrypt from "bcrypt";
 import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
+import { checkEmailAvailable, hasOwnDatabase, normalizeEmail } from "../lib/accounts";
 import { resolvePlatformMembership } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
 const MAX_STAFF_PER_PLATFORM = 5;
+
+// Staff accounts live with the business's other data: its own database once
+// connected (plus a central staff_directory entry so login can find them),
+// otherwise the shared database. tenantDb() returns the right one.
 
 async function requireOwner(req: AuthedRequest) {
   const membership = await resolvePlatformMembership(req.userId as string);
@@ -33,7 +40,8 @@ export async function listStaff(req: AuthedRequest, res: Response) {
   const membership = await requireOwner(req);
   if (!membership) return res.status(403).json({ error: "Owner access required" });
 
-  const platformUsers = await prisma.platform_users.findMany({
+  const db = await tenantDb(membership.platformId);
+  const platformUsers = await db.platform_users.findMany({
     where: { platform_id: membership.platformId, role: "STAFF" },
     include: { users: true },
     orderBy: { created_at: "asc" },
@@ -49,7 +57,9 @@ export async function createStaff(req: AuthedRequest, res: Response) {
   const membership = await requireOwner(req);
   if (!membership) return res.status(403).json({ error: "Owner access required" });
 
-  const staffCount = await prisma.platform_users.count({
+  const db = await tenantDb(membership.platformId);
+  const ownDatabase = await hasOwnDatabase(membership.platformId);
+  const staffCount = await db.platform_users.count({
     where: { platform_id: membership.platformId, role: "STAFF" },
   });
   if (staffCount >= MAX_STAFF_PER_PLATFORM) {
@@ -72,31 +82,49 @@ export async function createStaff(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "phone must be a string" });
   }
 
-  const existing = await prisma.user.findFirst({
-    where: { email: { equals: email.trim(), mode: "insensitive" } },
-  });
-  if (existing) {
+  const { available, staleUserId } = await checkEmailAvailable(email, { platformId: membership.platformId });
+  if (!available) {
     return res.status(409).json({ error: "An account with this email already exists" });
   }
 
+  const userId = randomUUID();
+  const normalizedEmail = normalizeEmail(email);
   const password_hash = await bcrypt.hash(password, 10);
-  const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        email: email.trim(),
-        password_hash,
-        full_name: fullName.trim(),
-        phone: typeof phone === "string" && phone.trim() ? phone.trim() : null,
-        is_active: true,
-      },
+  const create = () =>
+    db.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          id: userId,
+          email: normalizedEmail,
+          password_hash,
+          full_name: fullName.trim(),
+          phone: typeof phone === "string" && phone.trim() ? phone.trim() : null,
+          is_active: true,
+        },
+      });
+      return tx.platform_users.create({
+        data: { platform_id: membership.platformId, user_id: user.id, role: "STAFF", is_active: true },
+        include: { users: true },
+      });
     });
-    return tx.platform_users.create({
-      data: { platform_id: membership.platformId, user_id: user.id, role: "STAFF", is_active: true },
-      include: { users: true },
-    });
-  });
 
-  return res.status(201).json({ staff: toStaffRecord(result) });
+  if (!ownDatabase) {
+    return res.status(201).json({ staff: toStaffRecord(await create()) });
+  }
+
+  // The account left on the shared database when the business moved is
+  // replaced by this one.
+  if (staleUserId) await prisma.user.delete({ where: { id: staleUserId } });
+  // Reserve the email centrally first, so two businesses can't take it at once.
+  await prisma.staff_directory.create({
+    data: { email: normalizedEmail, user_id: userId, platform_id: membership.platformId },
+  });
+  try {
+    return res.status(201).json({ staff: toStaffRecord(await create()) });
+  } catch (err) {
+    await prisma.staff_directory.delete({ where: { user_id: userId } }).catch(() => {});
+    throw err;
+  }
 }
 
 export async function updateStaff(req: AuthedRequest, res: Response) {
@@ -104,7 +132,8 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
   if (!membership) return res.status(403).json({ error: "Owner access required" });
 
   const { id } = req.params;
-  const existing = await prisma.platform_users.findFirst({
+  const db = await tenantDb(membership.platformId);
+  const existing = await db.platform_users.findFirst({
     where: { id, platform_id: membership.platformId, role: "STAFF" },
     include: { users: true },
   });
@@ -127,19 +156,24 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "isActive must be a boolean" });
   }
 
+  const ownDatabase = await hasOwnDatabase(membership.platformId);
   if (email !== undefined) {
-    const emailTaken = await prisma.user.findFirst({
-      where: { email: { equals: email.trim(), mode: "insensitive" }, id: { not: existing.users.id } },
-    });
-    if (emailTaken) return res.status(409).json({ error: "An account with this email already exists" });
+    const { available } = await checkEmailAvailable(email, { exceptUserId: existing.users.id });
+    if (!available) return res.status(409).json({ error: "An account with this email already exists" });
+    if (ownDatabase) {
+      await prisma.staff_directory.update({
+        where: { user_id: existing.users.id },
+        data: { email: normalizeEmail(email) },
+      });
+    }
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: existing.users.id },
       data: {
         ...(typeof fullName === "string" ? { full_name: fullName.trim() } : {}),
-        ...(typeof email === "string" ? { email: email.trim() } : {}),
+        ...(typeof email === "string" ? { email: ownDatabase ? normalizeEmail(email) : email.trim() } : {}),
         ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
         ...(typeof password === "string" ? { password_hash: await bcrypt.hash(password, 10) } : {}),
       },

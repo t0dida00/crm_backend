@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import prisma from "../config/prisma";
+import { checkEmailAvailable, findAccountByEmail, findMembership } from "../lib/accounts";
 
 const JWT_SECRET = process.env.JWT_SECRET as string;
 const JWT_EXPIRES_IN = "1d";
@@ -18,9 +19,9 @@ export async function login(req: Request, res: Response) {
     return res.status(400).json({ error: "Email and password are required" });
   }
 
-  const user = await prisma.user.findFirst({
-    where: { email: { equals: email, mode: "insensitive" } },
-  });
+  // Central accounts, or staff stored in their business's own database.
+  const account = await findAccountByEmail(email);
+  const user = account?.user;
 
   if (!user || !user.is_active) {
     return res.status(401).json({ error: "Invalid email or password" });
@@ -31,21 +32,20 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const platformUser = await prisma.platform_users.findUnique({
-    where: { user_id: user.id },
-  });
+  const membership = await findMembership(user.id);
 
-  // A platform_users row that exists but is inactive means an owner
-  // disabled this account — distinct from having no platform at all (a
-  // new user who should be allowed to proceed to workspace setup).
-  if (platformUser && !platformUser.is_active) {
+  // A membership that exists but is inactive means an owner disabled this
+  // account (or it was left behind when the business moved to its own
+  // database) — distinct from having no platform at all (a new user who
+  // should be allowed to proceed to workspace setup).
+  if (membership && !membership.isActive) {
     return res.status(403).json({
       error: "ACCOUNT_DISABLED",
       message: "Your account is disabled temporarily. Please contact your owner(s).",
     });
   }
 
-  const role = platformUser?.role ?? null;
+  const role = membership?.role ?? null;
 
   const token = signToken(user, role);
 
@@ -73,10 +73,7 @@ export async function register(req: Request, res: Response) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const existing = await prisma.user.findFirst({
-    where: { email: { equals: normalizedEmail, mode: "insensitive" } },
-  });
-  if (existing) {
+  if (!(await checkEmailAvailable(normalizedEmail)).available) {
     return res.status(409).json({ error: "An account with this email already exists" });
   }
 

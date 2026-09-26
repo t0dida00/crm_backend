@@ -125,6 +125,7 @@ model platforms {
   table_requests       table_requests[]
   table_sessions       table_sessions[]
   platform_connections platform_connections?
+  staff_directory      staff_directory[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -273,4 +274,19 @@ model platform_connections {
   created_at           DateTime  @default(now()) @db.Timestamptz(6)
   updated_at           DateTime  @default(now()) @db.Timestamptz(6)
   platforms            platforms @relation(fields: [platform_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_connection_platform")
+}
+
+/// Central database only. Finds which business's own database holds a staff
+/// account, for staff of businesses that connected one (their password hash,
+/// name, role and active flag live there, in `users` / `platform_users`).
+/// Owners, and staff of businesses on the shared database, are in `users`.
+model staff_directory {
+  /// Lowercased; unique across every business and the central `users`.
+  email       String    @id @db.VarChar(255)
+  user_id     String    @unique @db.Uuid
+  platform_id String    @db.Uuid
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  platforms   platforms @relation(fields: [platform_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_staff_directory_platform")
+
+  @@index([platform_id], map: "idx_staff_directory_platform")
 }

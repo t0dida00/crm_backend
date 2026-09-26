@@ -1,6 +1,11 @@
 import { describePusherError, provisionTenantDatabase, verifyPusher } from '../../src/lib/tenant-provision';
 
-const platform = { id: 'p1', name: 'Casa', platform_types: { id: 't1', code: 'CAFE', name: 'Cafe' } };
+const platform = {
+  id: 'p1',
+  name: 'Casa',
+  platform_types: { id: 't1', code: 'CAFE', name: 'Cafe' },
+  profile: { phone: '+34 600', email: 'hi@casa.com', address: 'Mar 1', logo_url: null },
+};
 
 /** A pg Client stand-in: answers queries by matching SQL text. */
 function fakeClient(answers: { tables: number; owner?: string; failOn?: RegExp; connectError?: Error }) {
@@ -10,7 +15,7 @@ function fakeClient(answers: { tables: number; owner?: string; failOn?: RegExp; 
       if (answers.connectError) throw answers.connectError;
     }),
     end: jest.fn(async () => {}),
-    query: jest.fn(async (sql: string) => {
+    query: jest.fn(async (sql: string, _params?: unknown[]) => {
       queries.push(sql);
       if (answers.failOn?.test(sql)) throw new Error('boom');
       if (sql.includes('information_schema.tables')) return { rows: [{ count: String(answers.tables) }] };
@@ -31,6 +36,9 @@ describe('provisionTenantDatabase', () => {
     expect(queries[2]).toBe('BEGIN');
     expect(queries[3]).toContain('CREATE TABLE "menu_items"');
     expect(queries.some((q) => q.includes('INSERT INTO "tenant_meta"'))).toBe(true);
+    // The business profile is copied into the business's own database.
+    const insert = client.query.mock.calls.find(([q]) => String(q).includes('INSERT INTO "platforms"'));
+    expect(insert?.[1]).toEqual(['p1', 't1', 'Casa', '+34 600', 'hi@casa.com', 'Mar 1', null]);
     expect(queries.at(-1)).toBe('COMMIT');
     expect(client.end).toHaveBeenCalled();
   });
@@ -39,6 +47,7 @@ describe('provisionTenantDatabase', () => {
     const { queries, make } = fakeClient({ tables: 16, owner: 'p1' });
     await expect(provisionTenantDatabase('postgresql://x/db', platform, make)).resolves.toEqual({ created: false });
     expect(queries).not.toContain('BEGIN');
+    expect(queries.some((q) => q.startsWith('UPDATE "platforms"'))).toBe(true);
   });
 
   it("refuses another business's database", async () => {

@@ -3,22 +3,27 @@ import prisma from "../config/prisma";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
 import { publicPusherConfig } from "../lib/platform-connections";
+import { findMembership } from "../lib/accounts";
+import { readProfile } from "../lib/business-profile";
+import { tenantDb } from "../config/tenant-db";
 
 export async function getMyPlatform(req: AuthedRequest, res: Response) {
-  const platformUser = await prisma.platform_users.findUnique({
-    where: { user_id: req.userId },
-    include: { platforms: { include: { platform_types: true } } },
-  });
-
-  if (!platformUser || !platformUser.is_active) {
+  // Owners are in the central database; staff may be in their business's own.
+  const membership = await findMembership(req.userId as string);
+  if (!membership || !membership.isActive) {
     return res.status(404).json({ error: "No platform found for this user" });
   }
 
-  return res.status(200).json({
-    platform: platformUser.platforms,
-    role: platformUser.role,
-    pusher: await publicPusherConfig(platformUser.platform_id),
+  const platform = await prisma.platforms.findUniqueOrThrow({
+    where: { id: membership.platformId },
+    include: { platform_types: true },
   });
+  const [profile, pusher] = await Promise.all([
+    readProfile(membership.platformId),
+    publicPusherConfig(membership.platformId),
+  ]);
+
+  return res.status(200).json({ platform: { ...platform, ...profile }, role: membership.role, pusher });
 }
 
 export async function createPlatform(req: AuthedRequest, res: Response) {
@@ -31,10 +36,7 @@ export async function createPlatform(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "platformTypeCode is required" });
   }
 
-  const existing = await prisma.platform_users.findUnique({
-    where: { user_id: req.userId },
-  });
-  if (existing) {
+  if (await findMembership(req.userId as string)) {
     return res.status(409).json({ error: "User already belongs to a platform" });
   }
 
@@ -72,12 +74,11 @@ export async function createPlatform(req: AuthedRequest, res: Response) {
 }
 
 export async function updateMyPlatform(req: AuthedRequest, res: Response) {
-  const platformUser = await prisma.platform_users.findUnique({
-    where: { user_id: req.userId },
-  });
-  if (!platformUser || !platformUser.is_active) {
+  const membership = await findMembership(req.userId as string);
+  if (!membership || !membership.isActive) {
     return res.status(404).json({ error: "No platform found for this user" });
   }
+  const platformId = membership.platformId;
 
   const { name, phone, email, address, logoUrl, platformTypeCode } = req.body ?? {};
   if (name !== undefined && (typeof name !== "string" || !name.trim())) {
@@ -94,18 +95,33 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
     platformTypeId = type.id;
   }
 
-  const platform = await prisma.platforms.update({
-    where: { id: platformUser.platform_id },
-    data: {
-      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
-      ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
-      ...(typeof email === "string" ? { email: email.trim() || null } : {}),
-      ...(typeof address === "string" ? { address: address.trim() || null } : {}),
-      ...(typeof logoUrl === "string" ? { logo_url: logoUrl.trim() || null } : {}),
-      ...(platformTypeId ? { platform_type_id: platformTypeId } : {}),
-    },
+  const identity = {
+    ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
+    ...(platformTypeId ? { platform_type_id: platformTypeId } : {}),
+  };
+  const profileChanges = {
+    ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
+    ...(typeof email === "string" ? { email: email.trim() || null } : {}),
+    ...(typeof address === "string" ? { address: address.trim() || null } : {}),
+    ...(typeof logoUrl === "string" ? { logo_url: logoUrl.trim() || null } : {}),
+  };
+
+  // Name and type stay central (they find the business); the profile goes
+  // wherever the business's data lives (the same row when that's central).
+  const db = await tenantDb(platformId);
+  const central = await prisma.platforms.update({
+    where: { id: platformId },
+    data: db === prisma ? { ...identity, ...profileChanges } : identity,
     include: { platform_types: true },
   });
+  if (db !== prisma) {
+    await readProfile(platformId); // moves any profile still left centrally
+    await db.platforms.update({
+      where: { id: platformId },
+      data: { ...(identity.name ? { name: identity.name } : {}), ...profileChanges },
+    });
+  }
+  const platform = { ...central, ...(await readProfile(platformId)) };
 
   await emitToPlatform(platform.id, "platform:updated", { platform });
   return res.status(200).json({ platform });

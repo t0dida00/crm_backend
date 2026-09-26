@@ -12,6 +12,8 @@ interface PlatformCopy {
   id: string;
   name: string;
   platform_types: { id: string; code: string; name: string };
+  /** Contact details and logo: from now on stored in the business's database. */
+  profile: { phone: string | null; email: string | null; address: string | null; logo_url: string | null };
 }
 
 const describe = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 200);
@@ -58,7 +60,15 @@ export async function provisionTenantDatabase(
       const owner = await client
         .query<{ platform_id: string }>('SELECT "platform_id" FROM "tenant_meta" LIMIT 1')
         .catch(() => ({ rows: [] as { platform_id: string }[] }));
-      if (owner.rows[0]?.platform_id === platform.id) return { created: false };
+      if (owner.rows[0]?.platform_id === platform.id) {
+        // Reconnecting a database this business set up before: bring its name
+        // and profile up to date.
+        await client.query(
+          'UPDATE "platforms" SET "name" = $2, "phone" = $3, "email" = $4, "address" = $5, "logo_url" = $6 WHERE "id" = $1',
+          [platform.id, platform.name, platform.profile.phone, platform.profile.email, platform.profile.address, platform.profile.logo_url],
+        );
+        return { created: false };
+      }
       throw new ConnectionInputError(
         owner.rows.length
           ? "This database belongs to another business."
@@ -75,11 +85,18 @@ export async function provisionTenantDatabase(
         platform.platform_types.code,
         platform.platform_types.name,
       ]);
-      await client.query('INSERT INTO "platforms" ("id", "platform_type_id", "name") VALUES ($1, $2, $3)', [
-        platform.id,
-        platform.platform_types.id,
-        platform.name,
-      ]);
+      await client.query(
+        'INSERT INTO "platforms" ("id", "platform_type_id", "name", "phone", "email", "address", "logo_url") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [
+          platform.id,
+          platform.platform_types.id,
+          platform.name,
+          platform.profile.phone,
+          platform.profile.email,
+          platform.profile.address,
+          platform.profile.logo_url,
+        ],
+      );
       await client.query('INSERT INTO "tenant_meta" ("platform_id", "schema_version") VALUES ($1, $2)', [
         platform.id,
         TENANT_SCHEMA_VERSION,

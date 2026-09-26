@@ -2,10 +2,14 @@ jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
     platform_connections: { findUnique: jest.fn(), upsert: jest.fn() },
-    platforms: { findUniqueOrThrow: jest.fn() },
+    platforms: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
   },
 }));
 jest.mock('../../src/lib/platform-context', () => ({ resolvePlatformMembership: jest.fn() }));
+jest.mock('../../src/lib/business-profile', () => ({
+  EMPTY_PROFILE: { phone: null, email: null, address: null, logo_url: null },
+  readProfile: async () => ({ phone: '+34 600', email: null, address: 'Mar 1', logo_url: null }),
+}));
 jest.mock('../../src/lib/tenant-provision', () => ({
   TENANT_SCHEMA_VERSION: 1,
   provisionTenantDatabase: jest.fn(),
@@ -24,7 +28,7 @@ import { AuthedRequest } from '../../src/middleware/auth.middleware';
 
 const db = prisma as unknown as {
   platform_connections: { findUnique: jest.Mock; upsert: jest.Mock };
-  platforms: { findUniqueOrThrow: jest.Mock };
+  platforms: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
 };
 const DB_URL = 'postgresql://owner:hunter2@db.example.com:5432/shop';
 const PUSHER = { appId: '123456', key: 'abcdef1234567890', secret: 'fedcba0987654321', cluster: 'eu' };
@@ -70,7 +74,15 @@ describe('connection controller', () => {
     const res = await call(putConnections, BODY);
 
     expect(verifyPusher).toHaveBeenCalledWith(PUSHER);
-    expect(provisionTenantDatabase).toHaveBeenCalledWith(DB_URL, expect.objectContaining({ id: 'p1' }));
+    expect(provisionTenantDatabase).toHaveBeenCalledWith(
+      DB_URL,
+      expect.objectContaining({ id: 'p1', profile: { phone: '+34 600', email: null, address: 'Mar 1', logo_url: null } }),
+    );
+    // The central row keeps only what finds the business.
+    expect(db.platforms.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { phone: null, email: null, address: null, logo_url: null },
+    });
     expect(db.platform_connections.upsert).toHaveBeenCalledTimes(1);
     const saved = db.platform_connections.upsert.mock.calls[0][0].create;
     expect(decrypt(saved.database_url_enc)).toBe(DB_URL);

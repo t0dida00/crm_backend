@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import prisma from "../config/prisma";
 import { tenantDb } from "../config/tenant-db";
 import { publicPusherConfig } from "../lib/platform-connections";
+import { readProfile } from "../lib/business-profile";
 import { bestSellerIds } from "../lib/best-sellers";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { verifyTableToken } from "../lib/table-token";
@@ -68,17 +69,18 @@ export async function getPublicSettings(req: Request, res: Response) {
   if (!platform) return res.status(404).json({ error: "Platform not found" });
   const db = await tenantDb(platformId);
 
-  const [preferences, pusher] = await Promise.all([
+  const [preferences, pusher, profile] = await Promise.all([
     db.platform_preferences.findUnique({ where: { platform_id: platformId } }),
     publicPusherConfig(platformId),
+    readProfile(platformId),
   ]);
 
   return res.status(200).json({
     settings: {
       name: platform.name,
-      address: platform.address,
-      phone: platform.phone,
-      logoUrl: platform.logo_url,
+      address: profile.address,
+      phone: profile.phone,
+      logoUrl: profile.logo_url,
       currency: toSymbol(preferences?.currency ?? DEFAULT_CURRENCY_SYMBOL),
       taxRate: preferences?.common_tax_rate ?? 0,
       pusher,

@@ -2,65 +2,108 @@ jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
     platform_users: { findUnique: jest.fn() },
+    staff_directory: { findUnique: jest.fn() },
     platform_types: { findUnique: jest.fn() },
-    platforms: { update: jest.fn() },
+    platforms: { update: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn() },
   },
 }));
 jest.mock('../../src/realtime/socket', () => ({ emitToPlatform: jest.fn() }));
+jest.mock('../../src/lib/platform-connections', () => ({
+  getConnection: async () => ({ databaseUrl: null, pusher: null }),
+  publicPusherConfig: async () => null,
+}));
+// The business's own database: a separate mocked client, or the shared one.
+const ownDb = { platforms: { update: jest.fn(), findUnique: jest.fn() }, platform_users: { findUnique: jest.fn() } };
+let useOwnDb = false;
+jest.mock('../../src/config/tenant-db', () => ({
+  tenantDb: async () => (useOwnDb ? ownDb : jest.requireMock('../../src/config/prisma').default),
+}));
 
 import { Response } from 'express';
 import prisma from '../../src/config/prisma';
-import { updateMyPlatform } from '../../src/controllers/platform.controller';
+import { getMyPlatform, updateMyPlatform } from '../../src/controllers/platform.controller';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 
 const db = prisma as unknown as {
   platform_users: { findUnique: jest.Mock };
+  staff_directory: { findUnique: jest.Mock };
   platform_types: { findUnique: jest.Mock };
-  platforms: { update: jest.Mock };
+  platforms: { update: jest.Mock; findUnique: jest.Mock; findUniqueOrThrow: jest.Mock };
 };
+const EMPTY = { phone: null, email: null, address: null, logo_url: null };
 
-const call = async (body: unknown) => {
+const call = async (handler: typeof updateMyPlatform, body?: unknown) => {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
-  await updateMyPlatform({ userId: 'u1', body } as AuthedRequest, { status } as unknown as Response);
+  await handler({ userId: 'u1', body } as AuthedRequest, { status } as unknown as Response);
   return { status: status.mock.calls[0]?.[0], body: json.mock.calls[0]?.[0] };
 };
 
-describe('updateMyPlatform', () => {
-  beforeEach(() => {
-    jest.resetAllMocks();
-    db.platform_users.findUnique.mockResolvedValue({ platform_id: 'p1', is_active: true });
-    db.platforms.update.mockImplementation(async ({ data }) => ({ id: 'p1', ...data }));
-  });
+beforeEach(() => {
+  jest.resetAllMocks();
+  useOwnDb = false;
+  db.platform_users.findUnique.mockResolvedValue({ platform_id: 'p1', role: 'OWNER', is_active: true });
+  db.platforms.update.mockImplementation(async ({ data }) => ({ id: 'p1', name: 'Casa', ...data }));
+  db.platforms.findUnique.mockResolvedValue(EMPTY);
+  ownDb.platforms.findUnique.mockResolvedValue(EMPTY);
+});
 
-  it('updates the setup fields, including email and restaurant/cafe type', async () => {
+describe('updateMyPlatform', () => {
+  it('on the shared database, updates name, type and profile in one row', async () => {
     db.platform_types.findUnique.mockResolvedValue({ id: 'type-cafe' });
 
-    const res = await call({ name: ' Casa ', phone: '', email: ' hi@casa.com ', address: 'Mar 1', platformTypeCode: 'cafe' });
+    const res = await call(updateMyPlatform, { name: ' Casa ', phone: '', email: ' hi@casa.com ', address: 'Mar 1', platformTypeCode: 'cafe' });
 
     expect(db.platform_types.findUnique).toHaveBeenCalledWith({ where: { code: 'CAFE' } });
     expect(db.platforms.update).toHaveBeenCalledWith({
       where: { id: 'p1' },
-      data: { name: 'Casa', phone: null, email: 'hi@casa.com', address: 'Mar 1', platform_type_id: 'type-cafe' },
+      data: { name: 'Casa', platform_type_id: 'type-cafe', phone: null, email: 'hi@casa.com', address: 'Mar 1' },
       include: { platform_types: true },
     });
     expect(res.status).toBe(200);
   });
 
-  it('rejects an unknown type without updating', async () => {
-    db.platform_types.findUnique.mockResolvedValue(null);
-    expect(await call({ platformTypeCode: 'BAR' })).toEqual({ status: 400, body: { error: 'Unknown platform type' } });
-    expect(db.platforms.update).not.toHaveBeenCalled();
+  it("with its own database, keeps name/type central and writes the profile to the business's database", async () => {
+    useOwnDb = true;
+    db.platforms.findUnique.mockResolvedValue(EMPTY); // nothing left centrally to move
+
+    await call(updateMyPlatform, { name: 'Casa', phone: '+34 600', address: 'Mar 1' });
+
+    expect(db.platforms.update).toHaveBeenCalledWith({ where: { id: 'p1' }, data: { name: 'Casa' }, include: { platform_types: true } });
+    expect(ownDb.platforms.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { name: 'Casa', phone: '+34 600', address: 'Mar 1' },
+    });
   });
 
-  it('leaves the type alone when none is sent', async () => {
-    await call({ name: 'Casa' });
-    expect(db.platform_types.findUnique).not.toHaveBeenCalled();
-    expect(db.platforms.update.mock.calls[0][0].data).toEqual({ name: 'Casa' });
+  it('rejects an unknown type without updating', async () => {
+    db.platform_types.findUnique.mockResolvedValue(null);
+    expect(await call(updateMyPlatform, { platformTypeCode: 'BAR' })).toEqual({ status: 400, body: { error: 'Unknown platform type' } });
+    expect(db.platforms.update).not.toHaveBeenCalled();
   });
 
   it('returns 404 without a platform', async () => {
     db.platform_users.findUnique.mockResolvedValue(null);
-    expect((await call({ name: 'Casa' })).status).toBe(404);
+    db.staff_directory.findUnique.mockResolvedValue(null);
+    expect((await call(updateMyPlatform, { name: 'Casa' })).status).toBe(404);
+  });
+});
+
+describe('getMyPlatform', () => {
+  it("finds a staff member stored in their business's own database, as STAFF of the directory's business", async () => {
+    useOwnDb = true;
+    db.platform_users.findUnique.mockResolvedValue(null);
+    db.staff_directory.findUnique.mockResolvedValue({ user_id: 'u1', platform_id: 'p1' });
+    // Even if the business's database claims another business and OWNER, neither is trusted.
+    ownDb.platform_users.findUnique.mockResolvedValue({ user_id: 'u1', platform_id: 'other', role: 'OWNER', is_active: true });
+    db.platforms.findUniqueOrThrow.mockResolvedValue({ id: 'p1', name: 'Casa', ...EMPTY, platform_types: { code: 'CAFE' } });
+    ownDb.platforms.findUnique.mockResolvedValue({ phone: '+34 600', email: null, address: 'Mar 1', logo_url: null });
+
+    const res = await call(getMyPlatform);
+
+    expect(db.platforms.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: 'p1' }, include: { platform_types: true } });
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe('STAFF');
+    expect(res.body.platform).toMatchObject({ id: 'p1', phone: '+34 600', address: 'Mar 1' });
   });
 });

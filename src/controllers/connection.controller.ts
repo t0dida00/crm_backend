@@ -16,6 +16,7 @@ import {
   verifyPusher,
 } from "../lib/tenant-provision";
 import { getConnection, invalidateConnection, sharedInfraAllowed } from "../lib/platform-connections";
+import { EMPTY_PROFILE, readProfile } from "../lib/business-profile";
 
 /** What the owner sees: never the database URL or the Pusher secret. */
 export function toPublicConnections(row: platform_connections | null) {
@@ -76,7 +77,9 @@ export async function putConnections(req: AuthedRequest, res: Response) {
       where: { id: platformId },
       include: { platform_types: true },
     });
-    await provisionTenantDatabase(url, platform);
+    // The profile moves with the business's data, from wherever it is now.
+    const profile = await readProfile(platformId);
+    await provisionTenantDatabase(url, { ...platform, profile });
 
     const now = new Date();
     const data = {
@@ -97,6 +100,8 @@ export async function putConnections(req: AuthedRequest, res: Response) {
       update: data,
     });
     invalidateConnection(platformId);
+    // The central row keeps only what's needed to find the business.
+    await prisma.platforms.update({ where: { id: platformId }, data: EMPTY_PROFILE });
     return res.status(200).json(toPublicConnections(row));
   } catch (err) {
     if (err instanceof ConnectionInputError) return res.status(400).json({ error: err.message });
