@@ -57,3 +57,15 @@ export async function publicPusherConfig(platformId: string): Promise<{ key: str
     ? { key: row.pusher_key, cluster: row.pusher_cluster }
     : null;
 }
+
+/** The name of the business's own database (e.g. "crm_platform_test"), or null
+ * when it uses the shared one. Only the name: never the host or credentials. */
+export async function databaseName(platformId: string): Promise<string | null> {
+  const row = await prisma.platform_connections.findUnique({
+    where: { platform_id: platformId },
+    select: { database_label: true, database_url_enc: true },
+  });
+  if (!row?.database_url_enc || !row.database_label) return null;
+  const name = row.database_label.split("/").pop();
+  return name || null;
+}

@@ -16,6 +16,7 @@ import {
   verifyPusher,
 } from "../lib/tenant-provision";
 import { getConnection, invalidateConnection, sharedInfraAllowed } from "../lib/platform-connections";
+import { EMPTY_PROFILE, readProfile } from "../lib/business-profile";
 
 /** What the owner sees: never the database URL or the Pusher secret. */
 export function toPublicConnections(row: platform_connections | null) {
@@ -56,25 +57,42 @@ export async function getConnections(req: AuthedRequest, res: Response) {
   return res.status(200).json(toPublicConnections(row));
 }
 
-export async function putDatabase(req: AuthedRequest, res: Response) {
+/**
+ * Connects the business's own database and Pusher app together. Both are
+ * checked before either is saved (Pusher first: it has no side effects; then
+ * the database is connected and set up), so a failure never leaves one saved
+ * without the other.
+ */
+export async function putConnections(req: AuthedRequest, res: Response) {
   const platformId = await requireOwner(req, res);
   if (!platformId) return;
   if (!canEncrypt()) return res.status(503).json(CREDENTIALS_UNAVAILABLE);
 
   try {
-    const { url, label } = await checkDatabaseUrl(req.body?.url);
+    const { url, label } = await checkDatabaseUrl(req.body?.databaseUrl);
+    const pusher = checkPusherCredentials(req.body?.pusher);
+    await verifyPusher(pusher);
+
     const platform = await prisma.platforms.findUniqueOrThrow({
       where: { id: platformId },
       include: { platform_types: true },
     });
-    await provisionTenantDatabase(url, platform);
+    // The profile moves with the business's data, from wherever it is now.
+    const profile = await readProfile(platformId);
+    await provisionTenantDatabase(url, { ...platform, profile });
 
+    const now = new Date();
     const data = {
       database_url_enc: encrypt(url),
       database_label: label,
-      database_verified_at: new Date(),
+      database_verified_at: now,
       schema_version: TENANT_SCHEMA_VERSION,
-      updated_at: new Date(),
+      pusher_app_id: pusher.appId,
+      pusher_key: pusher.key,
+      pusher_cluster: pusher.cluster,
+      pusher_secret_enc: encrypt(pusher.secret),
+      pusher_verified_at: now,
+      updated_at: now,
     };
     const row = await prisma.platform_connections.upsert({
       where: { platform_id: platformId },
@@ -82,36 +100,8 @@ export async function putDatabase(req: AuthedRequest, res: Response) {
       update: data,
     });
     invalidateConnection(platformId);
-    return res.status(200).json(toPublicConnections(row));
-  } catch (err) {
-    if (err instanceof ConnectionInputError) return res.status(400).json({ error: err.message });
-    throw err;
-  }
-}
-
-export async function putPusher(req: AuthedRequest, res: Response) {
-  const platformId = await requireOwner(req, res);
-  if (!platformId) return;
-  if (!canEncrypt()) return res.status(503).json(CREDENTIALS_UNAVAILABLE);
-
-  try {
-    const creds = checkPusherCredentials(req.body);
-    await verifyPusher(creds);
-
-    const data = {
-      pusher_app_id: creds.appId,
-      pusher_key: creds.key,
-      pusher_cluster: creds.cluster,
-      pusher_secret_enc: encrypt(creds.secret),
-      pusher_verified_at: new Date(),
-      updated_at: new Date(),
-    };
-    const row = await prisma.platform_connections.upsert({
-      where: { platform_id: platformId },
-      create: { platform_id: platformId, ...data },
-      update: data,
-    });
-    invalidateConnection(platformId);
+    // The central row keeps only what's needed to find the business.
+    await prisma.platforms.update({ where: { id: platformId }, data: EMPTY_PROFILE });
     return res.status(200).json(toPublicConnections(row));
   } catch (err) {
     if (err instanceof ConnectionInputError) return res.status(400).json({ error: err.message });

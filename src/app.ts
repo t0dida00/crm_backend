@@ -16,11 +16,13 @@ import publicRoutes from "./routes/public.routes";
 import tableRequestRoutes from "./routes/table-request.routes";
 import staffRoutes from "./routes/staff.routes";
 import { TenantNotConnectedError } from "./config/tenant-db";
+import { limitTextLength } from "./middleware/limit-text";
 
 const app: Application = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(limitTextLength);
 
 app.use("/", healthRoutes);
 app.use("/", authRoutes);

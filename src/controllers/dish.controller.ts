@@ -3,6 +3,7 @@ import { DishStatus } from "@prisma/client";
 import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
+import { isNonNegative, MAX_SPECIAL_TAX } from "../lib/validation";
 
 const DISH_STATUSES = Object.values(DishStatus);
 const isDishStatus = (v: unknown): v is DishStatus =>
@@ -34,8 +35,17 @@ export async function createDish(req: AuthedRequest, res: Response) {
   if (typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "name is required" });
   }
-  if (typeof price !== "number" || price < 0) {
+  if (!isNonNegative(price)) {
     return res.status(400).json({ error: "price must be a non-negative number" });
+  }
+  if (typeof categoryId !== "string" || !categoryId) {
+    return res.status(400).json({ error: "category is required" });
+  }
+  if (!(await db.menu_categories.findFirst({ where: { id: categoryId, platform_id: platformId } }))) {
+    return res.status(400).json({ error: "Unknown category" });
+  }
+  if (taxPct !== undefined && taxPct !== null && (!isNonNegative(taxPct) || taxPct > MAX_SPECIAL_TAX)) {
+    return res.status(400).json({ error: `taxPct must be between 0 and ${MAX_SPECIAL_TAX}` });
   }
   if (status !== undefined && !isDishStatus(status)) {
     return res.status(400).json({ error: "status must be one of valid, sold_out, hidden" });
@@ -44,7 +54,7 @@ export async function createDish(req: AuthedRequest, res: Response) {
   const dish = await db.menu_items.create({
     data: {
       platform_id: platformId,
-      category_id: typeof categoryId === "string" ? categoryId : null,
+      category_id: categoryId,
       name: name.trim(),
       description: typeof description === "string" ? description : null,
       price,
@@ -84,13 +94,31 @@ export async function updateDish(req: AuthedRequest, res: Response) {
   if (status !== undefined && !isDishStatus(status)) {
     return res.status(400).json({ error: "status must be one of valid, sold_out, hidden" });
   }
+  if (name !== undefined && (typeof name !== "string" || !name.trim())) {
+    return res.status(400).json({ error: "name cannot be empty" });
+  }
+  if (price !== undefined && !isNonNegative(price)) {
+    return res.status(400).json({ error: "price must be a non-negative number" });
+  }
+  // Category is mandatory: it can be changed but not removed.
+  if (categoryId !== undefined) {
+    if (typeof categoryId !== "string" || !categoryId) {
+      return res.status(400).json({ error: "category is required" });
+    }
+    if (!(await db.menu_categories.findFirst({ where: { id: categoryId, platform_id: platformId } }))) {
+      return res.status(400).json({ error: "Unknown category" });
+    }
+  }
+  if (taxPct !== undefined && taxPct !== null && (!isNonNegative(taxPct) || taxPct > MAX_SPECIAL_TAX)) {
+    return res.status(400).json({ error: `taxPct must be between 0 and ${MAX_SPECIAL_TAX}` });
+  }
 
   const dish = await db.menu_items.update({
     where: { id },
     data: {
-      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
-      ...(typeof price === "number" && price >= 0 ? { price } : {}),
-      ...(categoryId === null || typeof categoryId === "string" ? { category_id: categoryId } : {}),
+      ...(typeof name === "string" ? { name: name.trim() } : {}),
+      ...(typeof price === "number" ? { price } : {}),
+      ...(typeof categoryId === "string" ? { category_id: categoryId } : {}),
       ...(typeof description === "string" ? { description } : {}),
       ...(typeof taxMode === "string" ? { tax_mode: taxMode } : {}),
       ...(taxName === null || typeof taxName === "string" ? { tax_name: taxName } : {}),

@@ -12,6 +12,8 @@ interface PlatformCopy {
   id: string;
   name: string;
   platform_types: { id: string; code: string; name: string };
+  /** Contact details and logo: from now on stored in the business's database. */
+  profile: { phone: string | null; email: string | null; address: string | null; logo_url: string | null };
 }
 
 const describe = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 200);
@@ -58,7 +60,15 @@ export async function provisionTenantDatabase(
       const owner = await client
         .query<{ platform_id: string }>('SELECT "platform_id" FROM "tenant_meta" LIMIT 1')
         .catch(() => ({ rows: [] as { platform_id: string }[] }));
-      if (owner.rows[0]?.platform_id === platform.id) return { created: false };
+      if (owner.rows[0]?.platform_id === platform.id) {
+        // Reconnecting a database this business set up before: bring its name
+        // and profile up to date.
+        await client.query(
+          'UPDATE "platforms" SET "name" = $2, "phone" = $3, "email" = $4, "address" = $5, "logo_url" = $6 WHERE "id" = $1',
+          [platform.id, platform.name, platform.profile.phone, platform.profile.email, platform.profile.address, platform.profile.logo_url],
+        );
+        return { created: false };
+      }
       throw new ConnectionInputError(
         owner.rows.length
           ? "This database belongs to another business."
@@ -75,11 +85,18 @@ export async function provisionTenantDatabase(
         platform.platform_types.code,
         platform.platform_types.name,
       ]);
-      await client.query('INSERT INTO "platforms" ("id", "platform_type_id", "name") VALUES ($1, $2, $3)', [
-        platform.id,
-        platform.platform_types.id,
-        platform.name,
-      ]);
+      await client.query(
+        'INSERT INTO "platforms" ("id", "platform_type_id", "name", "phone", "email", "address", "logo_url") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [
+          platform.id,
+          platform.platform_types.id,
+          platform.name,
+          platform.profile.phone,
+          platform.profile.email,
+          platform.profile.address,
+          platform.profile.logo_url,
+        ],
+      );
       await client.query('INSERT INTO "tenant_meta" ("platform_id", "schema_version") VALUES ($1, $2)', [
         platform.id,
         TENANT_SCHEMA_VERSION,
@@ -95,11 +112,37 @@ export async function provisionTenantDatabase(
   }
 }
 
-/** Checks Pusher credentials with a real (read-only) API call. */
-export async function verifyPusher(creds: PusherCredentials, makePusher = (c: PusherCredentials) => new Pusher({ ...c, useTLS: true, timeout: CONNECT_TIMEOUT_MS })) {
-  try {
-    await makePusher(creds).get({ path: "/channels" });
-  } catch (err) {
-    throw new ConnectionInputError(`Pusher rejected these credentials: ${describe(err)}`);
+const PUSHER_TIMEOUT_MS = 10_000;
+const PUSHER_ATTEMPTS = 2;
+
+/** What went wrong talking to Pusher, in words the owner can act on. */
+export function describePusherError(err: unknown): string {
+  const e = err as { status?: number; error?: { message?: string; name?: string } };
+  if (e?.status === 401 || e?.status === 403) {
+    return "Pusher rejected these credentials. Check the key and secret.";
+  }
+  if (e?.status === 404) return "Pusher couldn't find this app. Check the app ID and cluster.";
+  if (e?.status) return `Pusher answered with an error (${e.status}). Try again in a moment.`;
+  const cause = e?.error?.name === "AbortError" ? "it took too long to answer" : describe(e?.error ?? err);
+  return `Couldn't reach Pusher (${cause}). Check your internet connection and the cluster, then try again.`;
+}
+
+/**
+ * Checks Pusher credentials with a real (read-only) API call. A network
+ * failure is retried once; an answer from Pusher (e.g. 401) is not.
+ */
+export async function verifyPusher(
+  creds: PusherCredentials,
+  makePusher = (c: PusherCredentials) => new Pusher({ ...c, useTLS: true, timeout: PUSHER_TIMEOUT_MS }),
+) {
+  const pusher = makePusher(creds);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await pusher.get({ path: "/channels" });
+      return;
+    } catch (err) {
+      const answered = typeof (err as { status?: number })?.status === "number";
+      if (answered || attempt >= PUSHER_ATTEMPTS) throw new ConnectionInputError(describePusherError(err));
+    }
   }
 }

@@ -251,12 +251,20 @@ prisma/
 
 ## Each business's own database and Pusher
 
-The database in `DATABASE_URL` is the **central** database: accounts
-(`users`, `platform_users`), businesses (`platforms`, `platform_types`) and
-`platform_connections`. A business's operational data (menu, tables,
-sessions, orders, bookings, table requests, preferences, special taxes) lives
-in **its own database** once the owner connects one, otherwise in the central
-database too. Controllers get that business's client from
+The database in `DATABASE_URL` is the **central** database. Once a business
+connects its own database, everything it can keep there lives there, and the
+central database keeps only what's needed to sign in and find the business:
+
+| Data | Business's own database | Central database |
+|---|---|---|
+| Menu, tables, sessions, orders, bookings, table requests, preferences, special taxes | ✓ | |
+| Staff accounts (name, email, phone, password hash, active) | ✓ (`users`, `platform_users`) | `staff_directory`: email → business, so login knows where to look |
+| Business profile (phone, email, address, logo) | ✓ (`platforms` row) | cleared |
+| Business name, type, active flag | copy | ✓ (finds the business for guest QR links and login) |
+| Owner account | | ✓, so the owner can always sign in, even if their database is down |
+| Database / Pusher credentials | | ✓ `platform_connections`, encrypted |
+
+A business that hasn't connected one keeps all of this in the central database. Controllers get that business's client from
 `tenantDb(platformId)`; central tables always use `prisma`.
 
 The owner connects services in the app (onboarding step 2, or Settings →
@@ -265,8 +273,7 @@ Connections), through these OWNER-only routes:
 | Route | Does |
 |---|---|
 | `GET /platforms/me/connections` | What's connected: database label (`host/db`), Pusher app id/key/cluster. Never the URL or secret |
-| `PUT /platforms/me/connections/database` `{ url }` | Checks the URL, connects, creates every table in an **empty** database (or accepts one this business set up before), then stores it encrypted |
-| `PUT /platforms/me/connections/pusher` `{ appId, key, secret, cluster }` | Verifies with Pusher's API, then stores the secret encrypted |
+| `PUT /platforms/me/connections` `{ databaseUrl, pusher: { appId, key, secret, cluster } }` | Connects both together. Checks Pusher with its API, then checks the URL, connects and creates every table in an **empty** database (or accepts one this business set up before). Only when both pass are they saved, encrypted, in one write |
 | `POST /platforms/me/connections/test` | Re-checks both |
 
 - In production a database URL must use SSL (`sslmode=require`) and must not
@@ -278,6 +285,12 @@ Connections), through these OWNER-only routes:
   test fails if it's out of date. Existing business databases don't upgrade
   themselves yet: `tenant_meta.schema_version` records which version each has.
 - Connecting a different database later doesn't move any data.
+- Staff accounts a business had on the shared database stop working when it
+  connects its own (they're not copied). The owner recreates them; the same
+  email can be reused and replaces the old account.
+- Nothing read from a business's own database can choose the business or the
+  role: a staff login's business comes from `staff_directory`, and accounts
+  found there are always STAFF. (The owner controls that database.)
 - Each serverless instance caches a business's connection for 30 s, so other
   instances switch over within that time.
 - Browsers get the business's Pusher key and cluster from `GET /platforms/me`

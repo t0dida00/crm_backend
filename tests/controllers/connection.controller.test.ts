@@ -2,10 +2,14 @@ jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
     platform_connections: { findUnique: jest.fn(), upsert: jest.fn() },
-    platforms: { findUniqueOrThrow: jest.fn() },
+    platforms: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
   },
 }));
 jest.mock('../../src/lib/platform-context', () => ({ resolvePlatformMembership: jest.fn() }));
+jest.mock('../../src/lib/business-profile', () => ({
+  EMPTY_PROFILE: { phone: null, email: null, address: null, logo_url: null },
+  readProfile: async () => ({ phone: '+34 600', email: null, address: 'Mar 1', logo_url: null }),
+}));
 jest.mock('../../src/lib/tenant-provision', () => ({
   TENANT_SCHEMA_VERSION: 1,
   provisionTenantDatabase: jest.fn(),
@@ -19,16 +23,12 @@ import { resolvePlatformMembership } from '../../src/lib/platform-context';
 import { provisionTenantDatabase, verifyPusher } from '../../src/lib/tenant-provision';
 import { ConnectionInputError } from '../../src/lib/connection-input';
 import { decrypt } from '../../src/lib/crypto';
-import {
-  getConnections,
-  putDatabase,
-  putPusher,
-} from '../../src/controllers/connection.controller';
+import { getConnections, putConnections } from '../../src/controllers/connection.controller';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 
 const db = prisma as unknown as {
   platform_connections: { findUnique: jest.Mock; upsert: jest.Mock };
-  platforms: { findUniqueOrThrow: jest.Mock };
+  platforms: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
 };
 const DB_URL = 'postgresql://owner:hunter2@db.example.com:5432/shop';
 const PUSHER = { appId: '123456', key: 'abcdef1234567890', secret: 'fedcba0987654321', cluster: 'eu' };
@@ -52,11 +52,13 @@ describe('connection controller', () => {
     process.env.CREDENTIALS_KEY = originalKey;
   });
 
+  const BODY = { databaseUrl: DB_URL, pusher: PUSHER };
+  const platformRow = { id: 'p1', name: 'Casa', platform_types: { id: 't', code: 'CAFE', name: 'Cafe' } };
+
   it('is owner-only', async () => {
     (resolvePlatformMembership as jest.Mock).mockResolvedValue({ platformId: 'p1', role: 'STAFF' });
-    for (const handler of [getConnections, putDatabase, putPusher]) {
-      expect((await call(handler, {})).status).toBe(403);
-    }
+    expect((await call(getConnections)).status).toBe(403);
+    expect((await call(putConnections, BODY)).status).toBe(403);
     expect(db.platform_connections.upsert).not.toHaveBeenCalled();
   });
 
@@ -66,47 +68,58 @@ describe('connection controller', () => {
     expect(res.body).toMatchObject({ database: null, pusher: null, sharedInfraAllowed: true, canStoreCredentials: true });
   });
 
-  it('sets up and stores the database encrypted, returning only the label', async () => {
-    db.platforms.findUniqueOrThrow.mockResolvedValue({ id: 'p1', name: 'Casa', platform_types: { id: 't', code: 'CAFE', name: 'Cafe' } });
+  it('checks both, sets up the database, and saves both encrypted in one write', async () => {
+    db.platforms.findUniqueOrThrow.mockResolvedValue(platformRow);
 
-    const res = await call(putDatabase, { url: DB_URL });
+    const res = await call(putConnections, BODY);
 
-    expect(provisionTenantDatabase).toHaveBeenCalledWith(DB_URL, expect.objectContaining({ id: 'p1' }));
+    expect(verifyPusher).toHaveBeenCalledWith(PUSHER);
+    expect(provisionTenantDatabase).toHaveBeenCalledWith(
+      DB_URL,
+      expect.objectContaining({ id: 'p1', profile: { phone: '+34 600', email: null, address: 'Mar 1', logo_url: null } }),
+    );
+    // The central row keeps only what finds the business.
+    expect(db.platforms.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { phone: null, email: null, address: null, logo_url: null },
+    });
+    expect(db.platform_connections.upsert).toHaveBeenCalledTimes(1);
     const saved = db.platform_connections.upsert.mock.calls[0][0].create;
-    expect(saved.database_url_enc).not.toContain('hunter2');
     expect(decrypt(saved.database_url_enc)).toBe(DB_URL);
+    expect(decrypt(saved.pusher_secret_enc)).toBe(PUSHER.secret);
     expect(res.status).toBe(200);
     expect(res.body.database.label).toBe('db.example.com/shop');
-    expect(JSON.stringify(res.body)).not.toContain('hunter2');
+    expect(res.body.pusher).toMatchObject({ appId: '123456', key: PUSHER.key, cluster: 'eu' });
+    const text = JSON.stringify(res.body);
+    expect(text).not.toContain('hunter2');
+    expect(text).not.toContain(PUSHER.secret);
   });
 
-  it('returns 400 with the reason when the database is refused', async () => {
-    db.platforms.findUniqueOrThrow.mockResolvedValue({ id: 'p1', name: 'Casa', platform_types: {} });
+  it('requires both the database URL and the Pusher details', async () => {
+    expect((await call(putConnections, { databaseUrl: DB_URL })).status).toBe(400);
+    expect((await call(putConnections, { pusher: PUSHER })).status).toBe(400);
+    expect(provisionTenantDatabase).not.toHaveBeenCalled();
+    expect(db.platform_connections.upsert).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing and never touches the database when Pusher is rejected', async () => {
+    (verifyPusher as jest.Mock).mockRejectedValue(new ConnectionInputError('Pusher rejected these credentials: 401'));
+    const res = await call(putConnections, BODY);
+    expect(res).toEqual({ status: 400, body: { error: 'Pusher rejected these credentials: 401' } });
+    expect(provisionTenantDatabase).not.toHaveBeenCalled();
+    expect(db.platform_connections.upsert).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing when the database is refused', async () => {
+    db.platforms.findUniqueOrThrow.mockResolvedValue(platformRow);
     (provisionTenantDatabase as jest.Mock).mockRejectedValue(new ConnectionInputError('This database already has tables. Use an empty database.'));
-    const res = await call(putDatabase, { url: DB_URL });
+    const res = await call(putConnections, BODY);
     expect(res).toEqual({ status: 400, body: { error: 'This database already has tables. Use an empty database.' } });
     expect(db.platform_connections.upsert).not.toHaveBeenCalled();
   });
 
   it('refuses to store credentials without CREDENTIALS_KEY', async () => {
     delete process.env.CREDENTIALS_KEY;
-    expect((await call(putDatabase, { url: DB_URL })).status).toBe(503);
-    expect((await call(putPusher, PUSHER)).status).toBe(503);
-  });
-
-  it('verifies Pusher and never returns the secret', async () => {
-    const res = await call(putPusher, PUSHER);
-    expect(verifyPusher).toHaveBeenCalledWith(PUSHER);
-    const saved = db.platform_connections.upsert.mock.calls[0][0].create;
-    expect(decrypt(saved.pusher_secret_enc)).toBe(PUSHER.secret);
-    expect(res.body.pusher).toMatchObject({ appId: '123456', key: PUSHER.key, cluster: 'eu' });
-    expect(JSON.stringify(res.body)).not.toContain(PUSHER.secret);
-  });
-
-  it('rejects Pusher credentials that fail verification', async () => {
-    (verifyPusher as jest.Mock).mockRejectedValue(new ConnectionInputError('Pusher rejected these credentials: 401'));
-    const res = await call(putPusher, PUSHER);
-    expect(res.status).toBe(400);
-    expect(db.platform_connections.upsert).not.toHaveBeenCalled();
+    expect((await call(putConnections, BODY)).status).toBe(503);
   });
 });

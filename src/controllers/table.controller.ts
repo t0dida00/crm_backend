@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { isCount } from "../lib/validation";
 import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { signTableToken } from "../lib/table-token";
@@ -44,15 +45,16 @@ export async function createTable(req: AuthedRequest, res: Response) {
   if (typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "name is required" });
   }
-  if (typeof seats !== "number" || seats <= 0) {
-    return res.status(400).json({ error: "seats must be a positive number" });
+  if (!isCount(seats)) {
+    return res.status(400).json({ error: "seats must be a whole number from 1" });
   }
-  if (typeof zone !== "string" || !zone.trim()) {
-    return res.status(400).json({ error: "zone is required" });
+  // Zone is optional; a table without one is stored with an empty zone.
+  if (zone !== undefined && typeof zone !== "string") {
+    return res.status(400).json({ error: "zone must be text" });
   }
 
   const table = await db.tables.create({
-    data: { platform_id: platformId, name: name.trim(), seats, zone: zone.trim(), state: "Free" },
+    data: { platform_id: platformId, name: name.trim(), seats, zone: (zone ?? "").trim(), state: "Free" },
   });
   return res.status(201).json({ table });
 }
@@ -67,12 +69,21 @@ export async function updateTable(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
   const { name, seats, zone } = req.body ?? {};
+  if (name !== undefined && (typeof name !== "string" || !name.trim())) {
+    return res.status(400).json({ error: "name cannot be empty" });
+  }
+  if (seats !== undefined && !isCount(seats)) {
+    return res.status(400).json({ error: "seats must be a whole number from 1" });
+  }
+  if (zone !== undefined && typeof zone !== "string") {
+    return res.status(400).json({ error: "zone must be text" });
+  }
   const table = await db.tables.update({
     where: { id },
     data: {
-      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
-      ...(typeof seats === "number" && seats > 0 ? { seats } : {}),
-      ...(typeof zone === "string" && zone.trim() ? { zone: zone.trim() } : {}),
+      ...(typeof name === "string" ? { name: name.trim() } : {}),
+      ...(typeof seats === "number" ? { seats } : {}),
+      ...(typeof zone === "string" ? { zone: zone.trim() } : {}),
     },
   });
   return res.status(200).json({ table });

@@ -7,8 +7,13 @@ import prisma from '../../src/config/prisma';
 jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
+    staff_directory: { findUnique: jest.fn() },
     user: { findFirst: jest.fn(), create: jest.fn() },
   },
+}));
+// No business in these tests has its own database.
+jest.mock('../../src/lib/platform-connections', () => ({
+  getConnection: async () => ({ databaseUrl: null, pusher: null }),
 }));
 jest.mock('bcrypt');
 jest.mock('jsonwebtoken');
