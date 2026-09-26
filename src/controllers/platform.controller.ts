@@ -3,7 +3,7 @@ import prisma from "../config/prisma";
 import { isValidEmail, isValidPhone, MESSAGES } from "../lib/validation";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
-import { publicPusherConfig } from "../lib/platform-connections";
+import { databaseName, publicPusherConfig } from "../lib/platform-connections";
 import { findMembership } from "../lib/accounts";
 import { readProfile } from "../lib/business-profile";
 import { tenantDb } from "../config/tenant-db";
@@ -19,12 +19,18 @@ export async function getMyPlatform(req: AuthedRequest, res: Response) {
     where: { id: membership.platformId },
     include: { platform_types: true },
   });
-  const [profile, pusher] = await Promise.all([
+  const [profile, pusher, dbName] = await Promise.all([
     readProfile(membership.platformId),
     publicPusherConfig(membership.platformId),
+    databaseName(membership.platformId),
   ]);
 
-  return res.status(200).json({ platform: { ...platform, ...profile }, role: membership.role, pusher });
+  return res.status(200).json({
+    platform: { ...platform, ...profile },
+    role: membership.role,
+    pusher,
+    databaseName: dbName,
+  });
 }
 
 export async function createPlatform(req: AuthedRequest, res: Response) {

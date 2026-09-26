@@ -11,6 +11,7 @@ jest.mock('../../src/realtime/socket', () => ({ emitToPlatform: jest.fn() }));
 jest.mock('../../src/lib/platform-connections', () => ({
   getConnection: async () => ({ databaseUrl: null, pusher: null }),
   publicPusherConfig: async () => null,
+  databaseName: async () => 'crm_platform_test',
 }));
 // The business's own database: a separate mocked client, or the shared one.
 const ownDb = { platforms: { update: jest.fn(), findUnique: jest.fn() }, platform_users: { findUnique: jest.fn() } };
@@ -113,6 +114,7 @@ describe('getMyPlatform', () => {
     expect(db.platforms.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: 'p1' }, include: { platform_types: true } });
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('STAFF');
+    expect(res.body.databaseName).toBe('crm_platform_test');
     expect(res.body.platform).toMatchObject({ id: 'p1', phone: '+34 600', address: 'Mar 1' });
   });
 });
