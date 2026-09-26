@@ -79,9 +79,19 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
     return res.status(404).json({ error: "No platform found for this user" });
   }
 
-  const { name, phone, address, logoUrl } = req.body ?? {};
+  const { name, phone, email, address, logoUrl, platformTypeCode } = req.body ?? {};
   if (name !== undefined && (typeof name !== "string" || !name.trim())) {
     return res.status(400).json({ error: "name cannot be empty" });
+  }
+  // Setup's "Back" lets a new owner change restaurant/cafe after creating the business.
+  let platformTypeId: string | undefined;
+  if (platformTypeCode !== undefined) {
+    const type =
+      typeof platformTypeCode === "string"
+        ? await prisma.platform_types.findUnique({ where: { code: platformTypeCode.trim().toUpperCase() } })
+        : null;
+    if (!type) return res.status(400).json({ error: "Unknown platform type" });
+    platformTypeId = type.id;
   }
 
   const platform = await prisma.platforms.update({
@@ -89,9 +99,12 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
     data: {
       ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
       ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
+      ...(typeof email === "string" ? { email: email.trim() || null } : {}),
       ...(typeof address === "string" ? { address: address.trim() || null } : {}),
       ...(typeof logoUrl === "string" ? { logo_url: logoUrl.trim() || null } : {}),
+      ...(platformTypeId ? { platform_type_id: platformTypeId } : {}),
     },
+    include: { platform_types: true },
   });
 
   await emitToPlatform(platform.id, "platform:updated", { platform });

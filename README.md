@@ -265,8 +265,7 @@ Connections), through these OWNER-only routes:
 | Route | Does |
 |---|---|
 | `GET /platforms/me/connections` | What's connected: database label (`host/db`), Pusher app id/key/cluster. Never the URL or secret |
-| `PUT /platforms/me/connections/database` `{ url }` | Checks the URL, connects, creates every table in an **empty** database (or accepts one this business set up before), then stores it encrypted |
-| `PUT /platforms/me/connections/pusher` `{ appId, key, secret, cluster }` | Verifies with Pusher's API, then stores the secret encrypted |
+| `PUT /platforms/me/connections` `{ databaseUrl, pusher: { appId, key, secret, cluster } }` | Connects both together. Checks Pusher with its API, then checks the URL, connects and creates every table in an **empty** database (or accepts one this business set up before). Only when both pass are they saved, encrypted, in one write |
 | `POST /platforms/me/connections/test` | Re-checks both |
 
 - In production a database URL must use SSL (`sslmode=require`) and must not

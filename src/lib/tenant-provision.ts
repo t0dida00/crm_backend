@@ -95,11 +95,37 @@ export async function provisionTenantDatabase(
   }
 }
 
-/** Checks Pusher credentials with a real (read-only) API call. */
-export async function verifyPusher(creds: PusherCredentials, makePusher = (c: PusherCredentials) => new Pusher({ ...c, useTLS: true, timeout: CONNECT_TIMEOUT_MS })) {
-  try {
-    await makePusher(creds).get({ path: "/channels" });
-  } catch (err) {
-    throw new ConnectionInputError(`Pusher rejected these credentials: ${describe(err)}`);
+const PUSHER_TIMEOUT_MS = 10_000;
+const PUSHER_ATTEMPTS = 2;
+
+/** What went wrong talking to Pusher, in words the owner can act on. */
+export function describePusherError(err: unknown): string {
+  const e = err as { status?: number; error?: { message?: string; name?: string } };
+  if (e?.status === 401 || e?.status === 403) {
+    return "Pusher rejected these credentials. Check the key and secret.";
+  }
+  if (e?.status === 404) return "Pusher couldn't find this app. Check the app ID and cluster.";
+  if (e?.status) return `Pusher answered with an error (${e.status}). Try again in a moment.`;
+  const cause = e?.error?.name === "AbortError" ? "it took too long to answer" : describe(e?.error ?? err);
+  return `Couldn't reach Pusher (${cause}). Check your internet connection and the cluster, then try again.`;
+}
+
+/**
+ * Checks Pusher credentials with a real (read-only) API call. A network
+ * failure is retried once; an answer from Pusher (e.g. 401) is not.
+ */
+export async function verifyPusher(
+  creds: PusherCredentials,
+  makePusher = (c: PusherCredentials) => new Pusher({ ...c, useTLS: true, timeout: PUSHER_TIMEOUT_MS }),
+) {
+  const pusher = makePusher(creds);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await pusher.get({ path: "/channels" });
+      return;
+    } catch (err) {
+      const answered = typeof (err as { status?: number })?.status === "number";
+      if (answered || attempt >= PUSHER_ATTEMPTS) throw new ConnectionInputError(describePusherError(err));
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { provisionTenantDatabase } from '../../src/lib/tenant-provision';
+import { describePusherError, provisionTenantDatabase, verifyPusher } from '../../src/lib/tenant-provision';
 
 const platform = { id: 'p1', name: 'Casa', platform_types: { id: 't1', code: 'CAFE', name: 'Cafe' } };
 
@@ -63,5 +63,46 @@ describe('provisionTenantDatabase', () => {
       "Couldn't connect to the database: password authentication failed",
     );
     expect(client.end).toHaveBeenCalled();
+  });
+});
+
+describe('verifyPusher', () => {
+  const creds = { appId: '1', key: 'abcdefgh12', secret: 'abcdefgh34', cluster: 'eu' };
+  const networkError = Object.assign(new Error('Request failed with an error'), { error: new Error('getaddrinfo ENOTFOUND api-eu.pusher.com') });
+  const answered = (status: number) => Object.assign(new Error(`Unexpected status code ${status}`), { status });
+  const withGet = (get: jest.Mock) => () => ({ get }) as never;
+
+  it('passes when Pusher answers', async () => {
+    const get = jest.fn().mockResolvedValue({ status: 200 });
+    await expect(verifyPusher(creds, withGet(get))).resolves.toBeUndefined();
+  });
+
+  it('retries a network failure once', async () => {
+    const get = jest.fn().mockRejectedValueOnce(networkError).mockResolvedValueOnce({ status: 200 });
+    await expect(verifyPusher(creds, withGet(get))).resolves.toBeUndefined();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('says it could not reach Pusher, not that the credentials are wrong', async () => {
+    const get = jest.fn().mockRejectedValue(networkError);
+    await expect(verifyPusher(creds, withGet(get))).rejects.toThrow(
+      "Couldn't reach Pusher (getaddrinfo ENOTFOUND api-eu.pusher.com). Check your internet connection and the cluster, then try again.",
+    );
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains a timeout', () => {
+    const abort = Object.assign(new Error('Request failed with an error'), { error: Object.assign(new Error('aborted'), { name: 'AbortError' }) });
+    expect(describePusherError(abort)).toMatch(/it took too long to answer/);
+  });
+
+  it('does not retry when Pusher rejects the credentials', async () => {
+    const get = jest.fn().mockRejectedValue(answered(401));
+    await expect(verifyPusher(creds, withGet(get))).rejects.toThrow('Pusher rejected these credentials. Check the key and secret.');
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('points at the app ID and cluster on 404', () => {
+    expect(describePusherError(answered(404))).toMatch(/app ID and cluster/);
   });
 });
