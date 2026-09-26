@@ -62,18 +62,18 @@ describe('Order Controller - Intensive Tests', () => {
   });
 
   describe('List Orders - Intensive Tests', () => {
-    test('should return all orders for a platform', async () => {
-      const mockOrders = [
-        { id: '1', platform_id: 'platform-123', order_lines: [] },
-        { id: '2', platform_id: 'platform-123', order_lines: [] },
-      ];
+    test('should return open orders followed by recent closed orders', async () => {
+      const openOrders = [{ id: '1', closed_ts: null, order_lines: [] }];
+      const closedOrders = [{ id: '2', closed_ts: new Date(), order_lines: [] }];
 
-      (prisma.orders.findMany as jest.Mock).mockResolvedValue(mockOrders);
+      (prisma.orders.findMany as jest.Mock)
+        .mockResolvedValueOnce(openOrders)
+        .mockResolvedValueOnce(closedOrders);
 
       await listOrders(mockRequest as AuthedRequest, mockResponse as Response);
 
       expect(statusMock).toHaveBeenCalledWith(200);
-      expect(jsonMock).toHaveBeenCalledWith({ orders: mockOrders });
+      expect(jsonMock).toHaveBeenCalledWith({ orders: [...openOrders, ...closedOrders] });
     });
 
     test('should return 404 if no platform found', async () => {
@@ -85,35 +85,33 @@ describe('Order Controller - Intensive Tests', () => {
       expect(jsonMock).toHaveBeenCalledWith({ error: 'No platform found for this user' });
     });
 
-    test('should filter open orders when query parameter is true', async () => {
+    test('should only query open orders when open=true', async () => {
       mockRequest.query = { open: 'true' };
-      const mockOrders = [{ id: '1', closed_ts: null }];
+      const openOrders = [{ id: '1', closed_ts: null }];
 
-      (prisma.orders.findMany as jest.Mock).mockResolvedValue(mockOrders);
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue(openOrders);
 
       await listOrders(mockRequest as AuthedRequest, mockResponse as Response);
 
+      expect(prisma.orders.findMany).toHaveBeenCalledTimes(1);
       expect(prisma.orders.findMany).toHaveBeenCalledWith({
         where: { platform_id: 'platform-123', closed_ts: null },
         include: { order_lines: true },
         orderBy: { ts: 'desc' },
       });
+      expect(jsonMock).toHaveBeenCalledWith({ orders: openOrders });
     });
 
-    test('should return all orders when open query is false or missing', async () => {
-      const mockOrders = [
-        { id: '1', closed_ts: null },
-        { id: '2', closed_ts: new Date() },
-      ];
-
-      (prisma.orders.findMany as jest.Mock).mockResolvedValue(mockOrders);
+    test('should cap closed orders to the most recently closed', async () => {
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue([]);
 
       await listOrders(mockRequest as AuthedRequest, mockResponse as Response);
 
-      expect(prisma.orders.findMany).toHaveBeenCalledWith({
-        where: { platform_id: 'platform-123' },
+      expect(prisma.orders.findMany).toHaveBeenNthCalledWith(2, {
+        where: { platform_id: 'platform-123', closed_ts: { not: null } },
         include: { order_lines: true },
-        orderBy: { ts: 'desc' },
+        orderBy: { closed_ts: 'desc' },
+        take: 500,
       });
     });
 

@@ -117,14 +117,14 @@ export async function placeOrderForTable(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       const order = await prisma.$transaction(async (tx) => {
-        const existingCodes = await tx.orders.findMany({
-          where: { platform_id: platformId },
-          select: { code: true },
-        });
-        const maxNumber = existingCodes.reduce((max, o) => {
-          const n = Number(o.code.replace(/^ORD-/, ""));
-          return Number.isFinite(n) && n > max ? n : max;
-        }, 2400);
+        // Aggregate in the database — loading every code to find the max gets
+        // slow once a platform has a large order history.
+        const [{ max }] = await tx.$queryRaw<{ max: bigint | null }[]>`
+          SELECT MAX(SUBSTRING(code FROM 5)::bigint) AS max
+          FROM orders
+          WHERE platform_id = ${platformId}::uuid AND code ~ '^ORD-[0-9]+$'
+        `;
+        const maxNumber = Math.max(Number(max ?? 0), 2400);
 
         if (table && table.state !== "Seated") {
           await tx.tables.update({

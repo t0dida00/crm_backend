@@ -5,20 +5,29 @@ import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement"
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
 
+// Closed orders only grow, so the unfiltered list returns every open order but
+// just the most recently closed ones — loading a platform's whole history (with
+// lines) in one response can exceed Node's max string size and crash the server.
+const HISTORY_LIMIT = 500;
+
 export async function listOrders(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
 
-  const { open } = req.query;
-  const orders = await prisma.orders.findMany({
-    where: {
-      platform_id: platformId,
-      ...(open === "true" ? { closed_ts: null } : {}),
-    },
+  const openOrders = await prisma.orders.findMany({
+    where: { platform_id: platformId, closed_ts: null },
     include: { order_lines: true },
     orderBy: { ts: "desc" },
   });
-  return res.status(200).json({ orders });
+  if (req.query.open === "true") return res.status(200).json({ orders: openOrders });
+
+  const closedOrders = await prisma.orders.findMany({
+    where: { platform_id: platformId, closed_ts: { not: null } },
+    include: { order_lines: true },
+    orderBy: { closed_ts: "desc" },
+    take: HISTORY_LIMIT,
+  });
+  return res.status(200).json({ orders: [...openOrders, ...closedOrders] });
 }
 
 export async function getOrder(req: AuthedRequest, res: Response) {
