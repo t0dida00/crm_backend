@@ -1,0 +1,7 @@
+# Database and migrations
+
+- `prisma/migrations` has **no initial migration**, only incremental changes on top of an existing schema. `prisma migrate dev` fails on an empty database, so use `prisma db push` for fresh databases.
+- `db push` does **not** create partial indexes that exist only in migration SQL. `one_open_session_per_table` (in `20260910211023_table_sessions`) guarantees one open `table_sessions` row per table, and `order-placement.ts` relies on it to resolve concurrent-order races. A `db push`-only database lacks it. The README also mentions a "one OWNER per platform" partial unique index that is not in the schema or migrations.
+- Neither the local nor the Vercel database (`db.prisma.io`, `.env.development`) has a `_prisma_migrations` table: both were built with `db push`, so `prisma migrate deploy` would replay every migration and fail. Apply a new migration to each database with `npx dotenv -e <env file> -- prisma db execute --file prisma/migrations/<name>/migration.sql --schema prisma/schema.prisma`, and write its SQL to be re-runnable (`IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS`).
+- `db push` doesn't create triggers either. `menu_items.sold_count` is maintained by the `order_lines_sold_count` trigger (migration `20260926180000_dish_sold_count`); a database created with `db push` needs that file run on it.
+- After editing `schema.prisma`, run `prisma generate` (also runs on `postinstall`).
