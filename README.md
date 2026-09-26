@@ -27,6 +27,8 @@ cd crm_backend
 
 docker compose up -d --build        # starts Postgres (port 5432) and the API (port 3000)
 docker compose run --rm setup       # first run only: creates the tables and seeds data
+docker compose run --rm setup sh -c "npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260926180000_dish_sold_count/migration.sql && echo 'CREATE UNIQUE INDEX IF NOT EXISTS \"one_open_session_per_table\" ON \"table_sessions\" (\"table_id\") WHERE \"closed_at\" IS NULL;' | npx prisma db execute --schema prisma/schema.prisma --stdin"
+                                    # first run only: adds what db push skips (see below)
 
 curl http://localhost:3000/health   # → {"status":"ok"}
 ```
@@ -78,6 +80,11 @@ Create the schema and seed data, then start the dev server:
 
 ```bash
 npx dotenv -e .env.local -- prisma db push   # creates all tables from prisma/schema.prisma
+# add the trigger and partial index that db push skips (see below)
+npx dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma \
+  --file prisma/migrations/20260926180000_dish_sold_count/migration.sql
+echo 'CREATE UNIQUE INDEX IF NOT EXISTS "one_open_session_per_table" ON "table_sessions" ("table_id") WHERE "closed_at" IS NULL;' \
+  | npx dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma --stdin
 npm run prisma:seed                          # platform types + admin@example.com / password123
 npm run dev                                  # tsx watch, reloads on change
 ```
@@ -90,6 +97,33 @@ Server listens on `PORT` (default `3000`); check it with
 > existing schema (there is no initial migration), so `npm run
 > prisma:migrate` fails against an empty database. Use it only on a database
 > that already has the base tables.
+
+> **`db push` skips triggers and partial indexes.** A fresh database needs the
+> two extra commands above:
+> - The `order_lines_sold_count` trigger keeps `menu_items.sold_count` current.
+> - The `one_open_session_per_table` index keeps a table to one open dining
+>   session; order placement relies on it when two orders arrive at once.
+>
+> Don't run the other migration files on a `db push` database. They alter
+> tables `db push` has already created in their final form, so they fail.
+
+### Applying a new migration
+
+The existing databases (local and the one Vercel uses) were built with
+`db push`, so they have no migration history and `prisma migrate deploy`
+would try to replay every migration. Instead, apply a new migration's SQL to
+each database directly:
+
+```bash
+npx dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma \
+  --file prisma/migrations/<name>/migration.sql         # local
+npx dotenv -e .env.development -- prisma db execute --schema prisma/schema.prisma \
+  --file prisma/migrations/<name>/migration.sql         # the database Vercel uses
+```
+
+Write migration SQL so it can safely run twice (`IF NOT EXISTS`,
+`CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS`), and add the column to
+`schema.prisma` too so the Prisma Client knows about it.
 
 ### Production build
 
@@ -140,6 +174,10 @@ doesn't reach already-built functions even after a redeploy — if a var
 that's clearly set still isn't showing up at runtime, remove it and re-add
 it, then redeploy again.
 
+`vercel env pull` / `vercel link` also add a `VERCEL_OIDC_TOKEN` line to
+`.env.local`. Nothing in this app reads it and it expires within hours, so it's
+safe to delete.
+
 ## Structure
 
 ```
@@ -155,6 +193,8 @@ src/
     order-placement.ts    placeOrderForTable() — shared by the staff and
                            public order-creation endpoints
     table-token.ts         signs/verifies the QR code token (platformId + tableId)
+    best-sellers.ts        bestSellerIds() — the top 5 dishes by sold_count,
+                           flagged on the guest menu
   realtime/
     socket.ts              emitToPlatform(platformId, event, payload) — publishes
                            to Pusher; every write worth telling other sessions
@@ -180,6 +220,11 @@ prisma/
 - **`platform_preferences`** — currency + common tax rate for a platform.
 - **`menu_categories`**, **`menu_items`** — the menu; a dish can carry its
   own special tax (`tax_mode: include|exclude`, `tax_name`, `tax_pct`).
+  `menu_items.sold_count` is the units ordered across all existing orders. A
+  trigger on `order_lines` keeps it current: placing an order, changing a line
+  and deleting an order all update it. Never write it from code. The guest
+  menu (`GET /public/platforms/:id/menu`) never returns it; instead it flags
+  the top 5 sellers with `is_best_seller`.
 - **`special_taxes`** — named extra taxes a dish can reference.
 - **`tables`** — `state` (`Free|Booked|Seated|Finished`), `seated_at`.
 - **`orders`**, **`order_lines`** — an order snapshots its `tax_rate` at
