@@ -44,6 +44,8 @@ docker compose up -d --build && docker compose run --rm setup   # Postgres + API
 
 ## Tests
 
+**Every new feature, endpoint or utility ships with tests in the same change**, and a behavior change to existing code updates the tests that cover it. Run `npm test` before committing.
+
 Unit tests only, in `tests/controllers/*.test.ts`; controllers are called directly with mock `req`/`res`. Conventions:
 - Mock `src/config/prisma` with an **explicit factory** listing the delegates used (`orders: { findFirst: jest.fn(), ... }`). Automocking the module leaves `prisma.<model>` undefined because the client's model delegates aren't own properties.
 - Use `jest.resetAllMocks()` in `beforeEach`, not `clearAllMocks`, so a `mockRejectedValue` in one test doesn't leak into the next.
