@@ -29,7 +29,7 @@ import { createStaff, listStaff } from '../../src/controllers/staff.controller';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 
 const central = prisma as unknown as Record<string, Record<string, jest.Mock>> & { $transaction: jest.Mock };
-const BODY = { email: ' Ana@Casa.com ', password: 'longenough', fullName: 'Ana' };
+const BODY = { email: ' Ana@Casa.com ', password: 'longenough', fullName: 'Ana Ruiz', phone: '+34 600 111 222' };
 const record = (userId: string) => ({ id: 'pu1', role: 'STAFF', is_active: true, created_at: new Date(0), users: { id: userId, email: 'ana@casa.com', phone: null, full_name: 'Ana', is_active: true } });
 
 const call = async (handler: typeof createStaff, body?: unknown) => {
@@ -76,7 +76,7 @@ describe('staff accounts', () => {
 
     expect(res.status).toBe(201);
     const created = ownDb.user.create.mock.calls[0][0].data;
-    expect(created).toMatchObject({ email: 'ana@casa.com', password_hash: 'hashed', full_name: 'Ana' });
+    expect(created).toMatchObject({ email: 'ana@casa.com', password_hash: 'hashed', full_name: 'Ana Ruiz', phone: '+34 600 111 222' });
     expect(central.staff_directory.create).toHaveBeenCalledWith({
       data: { email: 'ana@casa.com', user_id: created.id, platform_id: 'p1' },
     });
@@ -110,6 +110,16 @@ describe('staff accounts', () => {
     central.staff_directory.delete.mockResolvedValue({});
     await expect(call(createStaff, BODY)).rejects.toThrow('database unreachable');
     expect(central.staff_directory.delete).toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ ...BODY, fullName: 'Ana' }, 'Full name must be at least two words'],
+    [{ ...BODY, email: 'ana@' }, 'Enter a valid email'],
+    [{ ...BODY, phone: '' }, 'Phone must contain only digits, with an optional + at the start'],
+    [{ ...BODY, phone: 'sadsa' }, 'Phone must contain only digits, with an optional + at the start'],
+  ])('rejects invalid input %#', async (body, error) => {
+    central.platform_users.count.mockResolvedValue(0);
+    expect(await call(createStaff, body)).toEqual({ status: 400, body: { error } });
   });
 
   it("lists staff from the business's own database", async () => {

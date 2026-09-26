@@ -21,7 +21,7 @@ jest.mock('../../src/config/tenant-db', () => ({
 
 import { Response } from 'express';
 import prisma from '../../src/config/prisma';
-import { getMyPlatform, updateMyPlatform } from '../../src/controllers/platform.controller';
+import { createPlatform, getMyPlatform, updateMyPlatform } from '../../src/controllers/platform.controller';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 
 const db = prisma as unknown as {
@@ -52,12 +52,12 @@ describe('updateMyPlatform', () => {
   it('on the shared database, updates name, type and profile in one row', async () => {
     db.platform_types.findUnique.mockResolvedValue({ id: 'type-cafe' });
 
-    const res = await call(updateMyPlatform, { name: ' Casa ', phone: '', email: ' hi@casa.com ', address: 'Mar 1', platformTypeCode: 'cafe' });
+    const res = await call(updateMyPlatform, { name: ' Casa ', phone: ' +34 600 000 000 ', email: ' hi@casa.com ', address: 'Mar 1', platformTypeCode: 'cafe' });
 
     expect(db.platform_types.findUnique).toHaveBeenCalledWith({ where: { code: 'CAFE' } });
     expect(db.platforms.update).toHaveBeenCalledWith({
       where: { id: 'p1' },
-      data: { name: 'Casa', platform_type_id: 'type-cafe', phone: null, email: 'hi@casa.com', address: 'Mar 1' },
+      data: { name: 'Casa', platform_type_id: 'type-cafe', phone: '+34 600 000 000', email: 'hi@casa.com', address: 'Mar 1' },
       include: { platform_types: true },
     });
     expect(res.status).toBe(200);
@@ -67,13 +67,22 @@ describe('updateMyPlatform', () => {
     useOwnDb = true;
     db.platforms.findUnique.mockResolvedValue(EMPTY); // nothing left centrally to move
 
-    await call(updateMyPlatform, { name: 'Casa', phone: '+34 600', address: 'Mar 1' });
+    await call(updateMyPlatform, { name: 'Casa', phone: '+34 600 000 000', address: 'Mar 1' });
 
     expect(db.platforms.update).toHaveBeenCalledWith({ where: { id: 'p1' }, data: { name: 'Casa' }, include: { platform_types: true } });
     expect(ownDb.platforms.update).toHaveBeenCalledWith({
       where: { id: 'p1' },
-      data: { name: 'Casa', phone: '+34 600', address: 'Mar 1' },
+      data: { name: 'Casa', phone: '+34 600 000 000', address: 'Mar 1' },
     });
+  });
+
+  it.each([
+    [{ phone: '' }, 'Phone must contain only digits, with an optional + at the start'],
+    [{ phone: 'call me' }, 'Phone must contain only digits, with an optional + at the start'],
+    [{ address: '  ' }, 'Address cannot be empty'],
+  ])('rejects clearing or corrupting a mandatory field %p', async (body, error) => {
+    expect(await call(updateMyPlatform, body)).toEqual({ status: 400, body: { error } });
+    expect(db.platforms.update).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown type without updating', async () => {
@@ -105,5 +114,15 @@ describe('getMyPlatform', () => {
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('STAFF');
     expect(res.body.platform).toMatchObject({ id: 'p1', phone: '+34 600', address: 'Mar 1' });
+  });
+});
+
+describe('createPlatform', () => {
+  it.each([
+    [{ name: 'Casa', platformTypeCode: 'CAFE', address: 'Mar 1' }, 'Phone must contain only digits, with an optional + at the start'],
+    [{ name: 'Casa', platformTypeCode: 'CAFE', phone: 'abc', address: 'Mar 1' }, 'Phone must contain only digits, with an optional + at the start'],
+    [{ name: 'Casa', platformTypeCode: 'CAFE', phone: '+34 600 000 000' }, 'Address is required'],
+  ])('requires a valid phone and an address %#', async (body, error) => {
+    expect(await call(createPlatform, body)).toEqual({ status: 400, body: { error } });
   });
 });

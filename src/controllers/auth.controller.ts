@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import prisma from "../config/prisma";
 import { checkEmailAvailable, findAccountByEmail, findMembership } from "../lib/accounts";
+import { isFullName } from "../lib/validation";
 
 const JWT_SECRET = process.env.JWT_SECRET as string;
 const JWT_EXPIRES_IN = "1d";
@@ -64,6 +65,9 @@ export async function register(req: Request, res: Response) {
 
   if (typeof fullName !== "string" || !fullName.trim()) {
     return res.status(400).json({ error: "Full name is required" });
+  }
+  if (!isFullName(fullName)) {
+    return res.status(400).json({ error: "Full name must be at least two words" });
   }
   if (typeof email !== "string" || !EMAIL_PATTERN.test(email.trim())) {
     return res.status(400).json({ error: "A valid email is required" });

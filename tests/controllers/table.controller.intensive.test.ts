@@ -215,7 +215,7 @@ describe('Table Controller - Intensive Tests', () => {
       await createTable(mockRequest as AuthedRequest, mockResponse as Response);
 
       expect(statusMock).toHaveBeenCalledWith(400);
-      expect(jsonMock).toHaveBeenCalledWith({ error: 'seats must be a positive number' });
+      expect(jsonMock).toHaveBeenCalledWith({ error: 'seats must be a whole number from 1' });
     });
 
     test('should return 400 if seats is negative', async () => {
@@ -234,21 +234,25 @@ describe('Table Controller - Intensive Tests', () => {
       expect(statusMock).toHaveBeenCalledWith(400);
     });
 
-    test('should return 400 if zone is missing', async () => {
+    test('should create a table without a zone (zone is optional)', async () => {
       mockRequest.body = { name: 'Table 1', seats: 4 };
+      (prisma.tables.create as jest.Mock).mockResolvedValue({ id: 't1' });
 
       await createTable(mockRequest as AuthedRequest, mockResponse as Response);
 
-      expect(statusMock).toHaveBeenCalledWith(400);
-      expect(jsonMock).toHaveBeenCalledWith({ error: 'zone is required' });
+      expect(prisma.tables.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ name: 'Table 1', seats: 4, zone: '' }),
+      });
+      expect(statusMock).toHaveBeenCalledWith(201);
     });
 
-    test('should return 400 if zone is empty string', async () => {
+    test('should save a blank zone as no zone', async () => {
       mockRequest.body = { name: 'Table 1', seats: 4, zone: '   ' };
+      (prisma.tables.create as jest.Mock).mockResolvedValue({ id: 't1' });
 
       await createTable(mockRequest as AuthedRequest, mockResponse as Response);
 
-      expect(statusMock).toHaveBeenCalledWith(400);
+      expect(prisma.tables.create).toHaveBeenCalledWith({ data: expect.objectContaining({ zone: '' }) });
     });
 
     test('should trim name and zone values', async () => {
@@ -347,19 +351,20 @@ describe('Table Controller - Intensive Tests', () => {
       });
     });
 
-    test('should ignore invalid field values', async () => {
-      mockRequest.body = { name: 'Updated Table', seats: 0, zone: '   ' };
-      const existingTable = { id: 'table-123' };
-
-      (prisma.tables.findFirst as jest.Mock).mockResolvedValue(existingTable);
-      (prisma.tables.update as jest.Mock).mockResolvedValue({});
+    test.each([
+      [{ seats: 0 }, 'seats must be a whole number from 1'],
+      [{ seats: 2.5 }, 'seats must be a whole number from 1'],
+      [{ zone: 42 }, 'zone must be text'],
+      [{ name: '' }, 'name cannot be empty'],
+    ])('should reject invalid field values %p without updating', async (body, error) => {
+      mockRequest.body = body;
+      (prisma.tables.findFirst as jest.Mock).mockResolvedValue({ id: 'table-123' });
 
       await updateTable(mockRequest as AuthedRequest, mockResponse as Response);
 
-      expect(prisma.tables.update).toHaveBeenCalledWith({
-        where: { id: 'table-123' },
-        data: { name: 'Updated Table' },
-      });
+      expect(statusMock).toHaveBeenCalledWith(400);
+      expect(jsonMock).toHaveBeenCalledWith({ error });
+      expect(prisma.tables.update).not.toHaveBeenCalled();
     });
 
     test('should trim name when updating', async () => {

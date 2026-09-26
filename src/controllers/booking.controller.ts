@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { isCount } from "../lib/validation";
 import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
@@ -41,8 +42,8 @@ export async function createBooking(req: AuthedRequest, res: Response) {
   if (typeof time !== "string" || !TIME_RE.test(time.trim())) {
     return res.status(400).json({ error: "time must be HH:MM" });
   }
-  if (typeof party !== "number" || party <= 0) {
-    return res.status(400).json({ error: "party must be a positive number" });
+  if (!isCount(party)) {
+    return res.status(400).json({ error: "party must be a whole number from 1" });
   }
   // The client sends its own local calendar date; without one, fall back to
   // today in UTC (not the server's local midnight, which can be yesterday in UTC).
@@ -81,13 +82,19 @@ export async function updateBooking(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Booking not found" });
 
   const { status, name, time, party } = req.body ?? {};
+  if (party !== undefined && !isCount(party)) {
+    return res.status(400).json({ error: "party must be a whole number from 1" });
+  }
+  if (name !== undefined && (typeof name !== "string" || !name.trim())) {
+    return res.status(400).json({ error: "name cannot be empty" });
+  }
   const booking = await db.bookings.update({
     where: { id },
     data: {
       ...(typeof status === "string" ? { status } : {}),
       ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
       ...(typeof time === "string" && time.trim() ? { time: time.trim() } : {}),
-      ...(typeof party === "number" && party > 0 ? { party } : {}),
+      ...(typeof party === "number" ? { party } : {}),
     },
   });
   return res.status(200).json({ booking });

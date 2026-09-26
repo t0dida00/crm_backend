@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { isNonNegative, MAX_COMMON_TAX, MAX_SPECIAL_TAX } from "../lib/validation";
 import type { PrismaClient } from "@prisma/client";
 import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
@@ -44,6 +45,9 @@ export async function updateSettings(req: AuthedRequest, res: Response) {
   const db = await tenantDb(platformId);
 
   const { currency, taxRate } = req.body ?? {};
+  if (taxRate !== undefined && (!isNonNegative(taxRate) || taxRate > MAX_COMMON_TAX)) {
+    return res.status(400).json({ error: `taxRate must be between 0 and ${MAX_COMMON_TAX}` });
+  }
   await getOrCreatePreferences(db, platformId);
 
   const preferences = await db.platform_preferences.update({
@@ -68,8 +72,8 @@ export async function createSpecialTax(req: AuthedRequest, res: Response) {
   if (typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "name is required" });
   }
-  if (typeof pct !== "number") {
-    return res.status(400).json({ error: "pct is required" });
+  if (!isNonNegative(pct) || pct > MAX_SPECIAL_TAX) {
+    return res.status(400).json({ error: `pct must be between 0 and ${MAX_SPECIAL_TAX}` });
   }
 
   const tax = await db.special_taxes.create({
@@ -88,6 +92,9 @@ export async function updateSpecialTax(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Special tax not found" });
 
   const { name, pct } = req.body ?? {};
+  if (pct !== undefined && (!isNonNegative(pct) || pct > MAX_SPECIAL_TAX)) {
+    return res.status(400).json({ error: `pct must be between 0 and ${MAX_SPECIAL_TAX}` });
+  }
   const tax = await db.special_taxes.update({
     where: { id },
     data: {

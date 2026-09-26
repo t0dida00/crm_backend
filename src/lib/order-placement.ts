@@ -1,5 +1,6 @@
 import { tenantDb } from "../config/tenant-db";
 import { emitToPlatform } from "../realtime/socket";
+import { isCount } from "./validation";
 
 interface OrderLineInput {
   itemId: string;
@@ -87,7 +88,8 @@ export async function placeOrderForTable(
   const resolvedLines = lines
     .map((line) => {
       const dish = dishById.get(line.itemId);
-      if (!dish || typeof line.qty !== "number" || line.qty <= 0) return null;
+      // A quantity is a whole number from 1; anything else drops the line.
+      if (!dish || !isCount(line.qty)) return null;
       return {
         item_id: dish.id,
         name: dish.name,

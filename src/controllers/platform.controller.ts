@@ -1,5 +1,6 @@
 import { Response } from "express";
 import prisma from "../config/prisma";
+import { isValidEmail, isValidPhone, MESSAGES } from "../lib/validation";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
 import { publicPusherConfig } from "../lib/platform-connections";
@@ -27,10 +28,16 @@ export async function getMyPlatform(req: AuthedRequest, res: Response) {
 }
 
 export async function createPlatform(req: AuthedRequest, res: Response) {
-  const { name, platformTypeCode, phone, email, address, logoUrl } = req.body ?? {};
+  const { name, platformTypeCode, phone, address, logoUrl } = req.body ?? {};
 
   if (typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Name is required" });
+  }
+  if (!isValidPhone(phone)) {
+    return res.status(400).json({ error: MESSAGES.phone });
+  }
+  if (typeof address !== "string" || !address.trim()) {
+    return res.status(400).json({ error: "Address is required" });
   }
   if (typeof platformTypeCode !== "string" || !platformTypeCode.trim()) {
     return res.status(400).json({ error: "platformTypeCode is required" });
@@ -47,14 +54,17 @@ export async function createPlatform(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "Unknown platform type" });
   }
 
+  // The business email is the owner's signup email (setup doesn't ask for one).
+  const owner = await prisma.user.findUnique({ where: { id: req.userId as string }, select: { email: true } });
+
   const result = await prisma.$transaction(async (tx) => {
     const platform = await tx.platforms.create({
       data: {
         platform_type_id: platformType.id,
         name: name.trim(),
-        phone: phone || null,
-        email: email || null,
-        address: address || null,
+        phone: phone.trim(),
+        email: owner?.email ?? null,
+        address: address.trim(),
         logo_url: logoUrl || null,
       },
     });
@@ -83,6 +93,16 @@ export async function updateMyPlatform(req: AuthedRequest, res: Response) {
   const { name, phone, email, address, logoUrl, platformTypeCode } = req.body ?? {};
   if (name !== undefined && (typeof name !== "string" || !name.trim())) {
     return res.status(400).json({ error: "name cannot be empty" });
+  }
+  // Phone and address are mandatory: they can be changed but not cleared.
+  if (phone !== undefined && !isValidPhone(phone)) {
+    return res.status(400).json({ error: MESSAGES.phone });
+  }
+  if (address !== undefined && (typeof address !== "string" || !address.trim())) {
+    return res.status(400).json({ error: "Address cannot be empty" });
+  }
+  if (email !== undefined && email !== "" && !isValidEmail(email)) {
+    return res.status(400).json({ error: MESSAGES.email });
   }
   // Setup's "Back" lets a new owner change restaurant/cafe after creating the business.
   let platformTypeId: string | undefined;

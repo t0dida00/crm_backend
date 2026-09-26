@@ -334,8 +334,9 @@ export async function setOrderLineQty(req: AuthedRequest, res: Response) {
   if (!line) return res.status(404).json({ error: "Order line not found" });
 
   const { qty } = req.body ?? {};
-  if (typeof qty !== "number") {
-    return res.status(400).json({ error: "qty is required" });
+  // A whole number; 0 (or less) removes the line.
+  if (typeof qty !== "number" || !Number.isInteger(qty)) {
+    return res.status(400).json({ error: "qty must be a whole number" });
   }
 
   const updated = await db.$transaction(async (tx) => {

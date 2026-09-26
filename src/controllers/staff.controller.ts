@@ -5,6 +5,7 @@ import prisma from "../config/prisma";
 import { tenantDb } from "../config/tenant-db";
 import { checkEmailAvailable, hasOwnDatabase, normalizeEmail } from "../lib/accounts";
 import { resolvePlatformMembership } from "../lib/platform-context";
+import { isFullName, isValidEmail, isValidPhone, MESSAGES } from "../lib/validation";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
 const MAX_STAFF_PER_PLATFORM = 5;
@@ -69,17 +70,17 @@ export async function createStaff(req: AuthedRequest, res: Response) {
   }
 
   const { email, password, fullName, phone } = req.body ?? {};
-  if (typeof email !== "string" || !email.trim()) {
-    return res.status(400).json({ error: "email is required" });
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: MESSAGES.email });
   }
   if (typeof password !== "string" || password.length < 8) {
     return res.status(400).json({ error: "password must be at least 8 characters" });
   }
-  if (typeof fullName !== "string" || !fullName.trim()) {
-    return res.status(400).json({ error: "fullName is required" });
+  if (!isFullName(fullName)) {
+    return res.status(400).json({ error: MESSAGES.fullName });
   }
-  if (phone !== undefined && typeof phone !== "string") {
-    return res.status(400).json({ error: "phone must be a string" });
+  if (!isValidPhone(phone)) {
+    return res.status(400).json({ error: MESSAGES.phone });
   }
 
   const { available, staleUserId } = await checkEmailAvailable(email, { platformId: membership.platformId });
@@ -98,7 +99,7 @@ export async function createStaff(req: AuthedRequest, res: Response) {
           email: normalizedEmail,
           password_hash,
           full_name: fullName.trim(),
-          phone: typeof phone === "string" && phone.trim() ? phone.trim() : null,
+          phone: phone.trim(),
           is_active: true,
         },
       });
@@ -140,14 +141,14 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
   if (!existing) return res.status(404).json({ error: "Staff account not found" });
 
   const { fullName, email, phone, password, isActive } = req.body ?? {};
-  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) {
-    return res.status(400).json({ error: "fullName cannot be empty" });
+  if (fullName !== undefined && !isFullName(fullName)) {
+    return res.status(400).json({ error: MESSAGES.fullName });
   }
-  if (email !== undefined && (typeof email !== "string" || !email.trim())) {
-    return res.status(400).json({ error: "email cannot be empty" });
+  if (email !== undefined && !isValidEmail(email)) {
+    return res.status(400).json({ error: MESSAGES.email });
   }
-  if (phone !== undefined && typeof phone !== "string") {
-    return res.status(400).json({ error: "phone must be a string" });
+  if (phone !== undefined && !isValidPhone(phone)) {
+    return res.status(400).json({ error: MESSAGES.phone });
   }
   if (password !== undefined && (typeof password !== "string" || password.length < 8)) {
     return res.status(400).json({ error: "password must be at least 8 characters" });
@@ -174,7 +175,7 @@ export async function updateStaff(req: AuthedRequest, res: Response) {
       data: {
         ...(typeof fullName === "string" ? { full_name: fullName.trim() } : {}),
         ...(typeof email === "string" ? { email: ownDatabase ? normalizeEmail(email) : email.trim() } : {}),
-        ...(typeof phone === "string" ? { phone: phone.trim() || null } : {}),
+        ...(typeof phone === "string" ? { phone: phone.trim() } : {}),
         ...(typeof password === "string" ? { password_hash: await bcrypt.hash(password, 10) } : {}),
       },
     });
