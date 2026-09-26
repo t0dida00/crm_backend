@@ -4,6 +4,8 @@ import prisma from "../config/prisma";
 import { resolvePlatformMembership } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
+const MAX_STAFF_PER_PLATFORM = 5;
+
 async function requireOwner(req: AuthedRequest) {
   const membership = await resolvePlatformMembership(req.userId as string);
   if (!membership || membership.role !== "OWNER") return null;
@@ -37,12 +39,24 @@ export async function listStaff(req: AuthedRequest, res: Response) {
     orderBy: { created_at: "asc" },
   });
 
-  return res.status(200).json({ staff: platformUsers.map(toStaffRecord) });
+  return res.status(200).json({
+    staff: platformUsers.map(toStaffRecord),
+    limit: MAX_STAFF_PER_PLATFORM,
+  });
 }
 
 export async function createStaff(req: AuthedRequest, res: Response) {
   const membership = await requireOwner(req);
   if (!membership) return res.status(403).json({ error: "Owner access required" });
+
+  const staffCount = await prisma.platform_users.count({
+    where: { platform_id: membership.platformId, role: "STAFF" },
+  });
+  if (staffCount >= MAX_STAFF_PER_PLATFORM) {
+    return res.status(409).json({
+      error: `Maximum of ${MAX_STAFF_PER_PLATFORM} staff accounts reached. Remove an existing account to add a new one.`,
+    });
+  }
 
   const { email, password, fullName, phone } = req.body ?? {};
   if (typeof email !== "string" || !email.trim()) {
