@@ -85,7 +85,7 @@ npx dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma \
   --file prisma/migrations/20260926180000_dish_sold_count/migration.sql
 echo 'CREATE UNIQUE INDEX IF NOT EXISTS "one_open_session_per_table" ON "table_sessions" ("table_id") WHERE "closed_at" IS NULL;' \
   | npx dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma --stdin
-npm run prisma:seed                          # platform types + admin@example.com / password123
+SEED_DEMO=1 npm run prisma:seed              # platform types (+ demo login admin@example.com / password123)
 npm run dev                                  # tsx watch, reloads on change
 ```
 
@@ -164,7 +164,13 @@ Both need:
 | `PORT` | HTTP port (default 3000) |
 | `DATABASE_URL` | Postgres connection string, read by Prisma |
 | `JWT_SECRET` | Signs/verifies staff session tokens |
-| `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET`, `PUSHER_CLUSTER` | Real-time event publishing (see Real-time below) |
+| `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET`, `PUSHER_CLUSTER` | Real-time event publishing (see Real-time below). The shared app, used by businesses that haven't connected their own |
+| `CREDENTIALS_KEY` | Encrypts the database URLs and Pusher secrets businesses connect. 64 hex chars (`openssl rand -hex 32`). **Every server using the same central database needs the same key** (Vercel and `.env.development` included), and changing it makes saved credentials unreadable. Without it, businesses can't connect their own services |
+| `ALLOW_SHARED_INFRA` | `true` (default): a business without its own database/Pusher uses the shared ones above. `false`: each business must connect both before it can use the app |
+
+`npm run prisma:seed` always seeds the platform types. It creates the demo
+login `admin@example.com` / `password123` only when `SEED_DEMO=1` (Docker
+Compose's `setup` sets it); otherwise owners sign up in the app.
 
 **Vercel deployment** (`crm-backend` project) reads none of these files —
 its env vars are set independently in the Vercel dashboard (Settings →
@@ -195,6 +201,14 @@ src/
     table-token.ts         signs/verifies the QR code token (platformId + tableId)
     best-sellers.ts        bestSellerIds() — the top 5 dishes by sold_count,
                            flagged on the guest menu
+    crypto.ts              AES-256-GCM encrypt/decrypt with CREDENTIALS_KEY
+    connection-input.ts    checks a business's database URL / Pusher credentials
+    tenant-provision.ts    sets up a business's own database, verifies Pusher
+    platform-connections.ts  a business's decrypted connections (cached 30 s)
+  config/tenant-db.ts      tenantDb(platformId) — the Prisma client for that
+                           business's data (its own database, or the shared one)
+  generated/tenant-init-sql.ts   full schema SQL for a business database
+                           (npm run tenant:sql; never edit by hand)
   realtime/
     socket.ts              emitToPlatform(platformId, event, payload) — publishes
                            to Pusher; every write worth telling other sessions
@@ -235,11 +249,47 @@ prisma/
 - **`table_requests`** — guest-initiated "call staff" / "checkout" pings
   from the `/client` app, `status: pending|resolved`.
 
+## Each business's own database and Pusher
+
+The database in `DATABASE_URL` is the **central** database: accounts
+(`users`, `platform_users`), businesses (`platforms`, `platform_types`) and
+`platform_connections`. A business's operational data (menu, tables,
+sessions, orders, bookings, table requests, preferences, special taxes) lives
+in **its own database** once the owner connects one, otherwise in the central
+database too. Controllers get that business's client from
+`tenantDb(platformId)`; central tables always use `prisma`.
+
+The owner connects services in the app (onboarding step 2, or Settings →
+Connections), through these OWNER-only routes:
+
+| Route | Does |
+|---|---|
+| `GET /platforms/me/connections` | What's connected: database label (`host/db`), Pusher app id/key/cluster. Never the URL or secret |
+| `PUT /platforms/me/connections/database` `{ url }` | Checks the URL, connects, creates every table in an **empty** database (or accepts one this business set up before), then stores it encrypted |
+| `PUT /platforms/me/connections/pusher` `{ appId, key, secret, cluster }` | Verifies with Pusher's API, then stores the secret encrypted |
+| `POST /platforms/me/connections/test` | Re-checks both |
+
+- In production a database URL must use SSL (`sslmode=require`) and must not
+  resolve to a private or loopback address, so the API can't be pointed at
+  machines on the host's own network. Locally, `localhost` is allowed.
+- Setting up a database runs `src/generated/tenant-init-sql.ts` with the `pg`
+  driver, because Vercel functions can't run the Prisma CLI. After changing
+  `schema.prisma` or `prisma/tenant-extras.sql`, run `npm run tenant:sql`; a
+  test fails if it's out of date. Existing business databases don't upgrade
+  themselves yet: `tenant_meta.schema_version` records which version each has.
+- Connecting a different database later doesn't move any data.
+- Each serverless instance caches a business's connection for 30 s, so other
+  instances switch over within that time.
+- Browsers get the business's Pusher key and cluster from `GET /platforms/me`
+  and `GET /public/platforms/:id/settings` (`pusher`, null = the shared app).
+
 ## Auth model
 
 Two trust levels, both hitting the same controllers/data where relevant:
 
-1. **Staff/admin** (`requireAuth` middleware): `POST /auth/login` with
+1. **Staff/admin** (`requireAuth` middleware): owners create an account with
+   `POST /auth/register` (`fullName`, `email`, `password` of 8+ characters),
+   then `POST /platforms` makes them the new business's OWNER. `POST /auth/login` with
    email+password returns a JWT (`sub` = user id). Every other non-public
    route requires `Authorization: Bearer <token>`; `resolvePlatformId(userId)`
    then scopes all reads/writes to that user's one platform.

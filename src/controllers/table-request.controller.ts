@@ -1,5 +1,5 @@
 import { Response } from "express";
-import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
@@ -7,6 +7,7 @@ import { emitToPlatform } from "../realtime/socket";
 export async function createTableRequest(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { tableName, type } = req.body ?? {};
   if (typeof tableName !== "string" || !tableName.trim()) {
@@ -16,17 +17,17 @@ export async function createTableRequest(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "type must be call_staff or checkout" });
   }
 
-  const table = await prisma.tables.findFirst({
+  const table = await db.tables.findFirst({
     where: { platform_id: platformId, name: tableName.trim() },
   });
   if (!table) return res.status(400).json({ error: "Unknown table" });
 
-  const existing = await prisma.table_requests.findFirst({
+  const existing = await db.table_requests.findFirst({
     where: { platform_id: platformId, table_id: table.id, type, status: "pending" },
   });
   if (existing) return res.status(200).json({ request: existing });
 
-  const request = await prisma.table_requests.create({
+  const request = await db.table_requests.create({
     data: {
       platform_id: platformId,
       table_id: table.id,
@@ -43,9 +44,10 @@ export async function createTableRequest(req: AuthedRequest, res: Response) {
 export async function listTableRequests(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { status } = req.query;
-  const requests = await prisma.table_requests.findMany({
+  const requests = await db.table_requests.findMany({
     where: {
       platform_id: platformId,
       status: typeof status === "string" ? status : "pending",
@@ -59,21 +61,22 @@ export async function listTableRequests(req: AuthedRequest, res: Response) {
 export async function resolveTableRequest(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.table_requests.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.table_requests.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Request not found" });
 
   if (existing.status === "resolved") {
     return res.status(200).json({ request: existing });
   }
 
-  await prisma.table_requests.updateMany({
+  await db.table_requests.updateMany({
     where: { id, platform_id: platformId, status: "pending" },
     data: { status: "resolved", resolved_at: new Date() },
   });
 
-  const request = await prisma.table_requests.findUnique({ where: { id } });
+  const request = await db.table_requests.findUnique({ where: { id } });
   await emitToPlatform(platformId, "table_request:resolved", { request });
   return res.status(200).json({ request });
 }

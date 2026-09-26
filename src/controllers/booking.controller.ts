@@ -1,11 +1,12 @@
 import { Response } from "express";
-import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
 export async function listBookings(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { date } = req.query;
   const where: { platform_id: string; date?: Date } = { platform_id: platformId };
@@ -13,7 +14,7 @@ export async function listBookings(req: AuthedRequest, res: Response) {
     where.date = new Date(date);
   }
 
-  const bookings = await prisma.bookings.findMany({ where, orderBy: { time: "asc" } });
+  const bookings = await db.bookings.findMany({ where, orderBy: { time: "asc" } });
   return res.status(200).json({ bookings });
 }
 
@@ -31,6 +32,7 @@ function parseBookingDate(value: string): Date | null {
 export async function createBooking(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { name, time, party, date } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
@@ -57,7 +59,7 @@ export async function createBooking(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "Bookings can't be made for a past date" });
   }
 
-  const booking = await prisma.bookings.create({
+  const booking = await db.bookings.create({
     data: {
       platform_id: platformId,
       name: name.trim(),
@@ -72,13 +74,14 @@ export async function createBooking(req: AuthedRequest, res: Response) {
 export async function updateBooking(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.bookings.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.bookings.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Booking not found" });
 
   const { status, name, time, party } = req.body ?? {};
-  const booking = await prisma.bookings.update({
+  const booking = await db.bookings.update({
     where: { id },
     data: {
       ...(typeof status === "string" ? { status } : {}),
@@ -93,31 +96,33 @@ export async function updateBooking(req: AuthedRequest, res: Response) {
 export async function deleteBooking(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.bookings.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.bookings.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Booking not found" });
 
-  await prisma.bookings.delete({ where: { id } });
+  await db.bookings.delete({ where: { id } });
   return res.status(204).send();
 }
 
 export async function assignBooking(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.bookings.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.bookings.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Booking not found" });
 
   const { tableId } = req.body ?? {};
   if (typeof tableId !== "string") {
     return res.status(400).json({ error: "tableId is required" });
   }
-  const table = await prisma.tables.findFirst({ where: { id: tableId, platform_id: platformId } });
+  const table = await db.tables.findFirst({ where: { id: tableId, platform_id: platformId } });
   if (!table) return res.status(404).json({ error: "Table not found" });
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const booking = await tx.bookings.update({ where: { id }, data: { table_id: tableId } });
     const updatedTable = await tx.tables.update({ where: { id: tableId }, data: { state: "Booked" } });
     return { booking, table: updatedTable };
@@ -129,12 +134,13 @@ export async function assignBooking(req: AuthedRequest, res: Response) {
 export async function unassignBooking(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.bookings.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.bookings.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Booking not found" });
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const booking = await tx.bookings.update({ where: { id }, data: { table_id: null } });
     let table = null;
     if (existing.table_id) {

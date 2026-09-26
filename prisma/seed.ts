@@ -46,7 +46,9 @@ async function seedAdminUser() {
 
 async function main() {
   await seedPlatformTypes();
-  await seedAdminUser();
+  // Owners sign up in the app; the demo login is only for local testing.
+  if (process.env.SEED_DEMO === "1") await seedAdminUser();
+  else console.log("Skipped demo user (set SEED_DEMO=1 to create admin@example.com)");
 }
 
 main()

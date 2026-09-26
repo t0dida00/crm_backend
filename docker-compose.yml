@@ -27,6 +27,8 @@ services:
       PUSHER_KEY: ${PUSHER_KEY:-}
       PUSHER_SECRET: ${PUSHER_SECRET:-}
       PUSHER_CLUSTER: ${PUSHER_CLUSTER:-}
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:-}
+      ALLOW_SHARED_INFRA: ${ALLOW_SHARED_INFRA:-true}
     ports:
       - "3000:3000"
     depends_on:
@@ -42,6 +44,7 @@ services:
       target: build
     environment:
       DATABASE_URL: postgresql://crm:crm@db:5432/crm_platform?schema=public
+      SEED_DEMO: "1"
     command: sh -c "npx prisma db push --skip-generate && npx prisma db seed"
     depends_on:
       db:
