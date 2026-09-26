@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import prisma from "../config/prisma";
+import { bestSellerIds } from "../lib/best-sellers";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { verifyTableToken } from "../lib/table-token";
 import { emitToPlatform } from "../realtime/socket";
@@ -33,7 +34,14 @@ export async function getPublicMenu(req: Request, res: Response) {
     orderBy: { name: "asc" },
   });
 
-  return res.status(200).json({ categories, dishes });
+  // Guests get a best-seller flag, never the raw sales count.
+  const bestSellers = bestSellerIds(dishes);
+  const publicDishes = dishes.map(({ sold_count: _soldCount, ...dish }) => ({
+    ...dish,
+    is_best_seller: bestSellers.has(dish.id),
+  }));
+
+  return res.status(200).json({ categories, dishes: publicDishes });
 }
 
 export async function getPublicTables(req: Request, res: Response) {
