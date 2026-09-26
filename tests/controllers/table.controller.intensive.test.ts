@@ -13,6 +13,10 @@ import * as tableToken from '../../src/lib/table-token';
 
 // The Prisma client's model delegates aren't own properties, so automocking
 // the module leaves `prisma.tables` undefined — spell out what's used instead.
+// Business data goes through tenantDb(); in tests it's the same mocked client.
+jest.mock('../../src/config/tenant-db', () => ({
+  tenantDb: async () => jest.requireMock('../../src/config/prisma').default,
+}));
 jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {

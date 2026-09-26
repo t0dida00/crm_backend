@@ -1,5 +1,5 @@
 import { Response } from "express";
-import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { signTableToken } from "../lib/table-token";
 import { AuthedRequest } from "../middleware/auth.middleware";
@@ -8,8 +8,9 @@ import { emitToPlatform } from "../realtime/socket";
 export async function listTables(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
-  const tables = await prisma.tables.findMany({
+  const tables = await db.tables.findMany({
     where: { platform_id: platformId },
     orderBy: { name: "asc" },
   });
@@ -19,8 +20,9 @@ export async function listTables(req: AuthedRequest, res: Response) {
 export async function listTableQrTokens(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
-  const tables = await prisma.tables.findMany({
+  const tables = await db.tables.findMany({
     where: { platform_id: platformId },
     orderBy: { name: "asc" },
   });
@@ -36,6 +38,7 @@ export async function listTableQrTokens(req: AuthedRequest, res: Response) {
 export async function createTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { name, seats, zone } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
@@ -48,7 +51,7 @@ export async function createTable(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "zone is required" });
   }
 
-  const table = await prisma.tables.create({
+  const table = await db.tables.create({
     data: { platform_id: platformId, name: name.trim(), seats, zone: zone.trim(), state: "Free" },
   });
   return res.status(201).json({ table });
@@ -57,13 +60,14 @@ export async function createTable(req: AuthedRequest, res: Response) {
 export async function updateTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.tables.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.tables.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
   const { name, seats, zone } = req.body ?? {};
-  const table = await prisma.tables.update({
+  const table = await db.tables.update({
     where: { id },
     data: {
       ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
@@ -77,32 +81,34 @@ export async function updateTable(req: AuthedRequest, res: Response) {
 export async function deleteTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.tables.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.tables.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
   const [openOrder, activeBooking] = await Promise.all([
-    prisma.orders.findFirst({ where: { table_id: id, closed_ts: null } }),
-    prisma.bookings.findFirst({ where: { table_id: id } }),
+    db.orders.findFirst({ where: { table_id: id, closed_ts: null } }),
+    db.bookings.findFirst({ where: { table_id: id } }),
   ]);
   if (openOrder || activeBooking) {
     return res.status(409).json({ error: "Table has an open order or active booking" });
   }
 
-  await prisma.tables.delete({ where: { id } });
+  await db.tables.delete({ where: { id } });
   return res.status(204).send();
 }
 
 export async function seatTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.tables.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.tables.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
-  const table = await prisma.tables.update({
+  const table = await db.tables.update({
     where: { id },
     data: { state: "Seated", seated_at: new Date() },
   });
@@ -113,12 +119,13 @@ export async function seatTable(req: AuthedRequest, res: Response) {
 export async function checkoutTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.tables.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.tables.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
-  const table = await prisma.$transaction(async (tx) => {
+  const table = await db.$transaction(async (tx) => {
     const closedAt = new Date();
     await tx.orders.updateMany({
       where: { table_id: id, closed_ts: null },
@@ -146,12 +153,13 @@ export async function checkoutTable(req: AuthedRequest, res: Response) {
 export async function freeTable(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.tables.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.tables.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Table not found" });
 
-  const table = await prisma.$transaction(async (tx) => {
+  const table = await db.$transaction(async (tx) => {
     await tx.bookings.updateMany({
       where: { table_id: id },
       data: { table_id: null },

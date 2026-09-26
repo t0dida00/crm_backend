@@ -1,5 +1,6 @@
 import { Response } from "express";
-import prisma from "../config/prisma";
+import type { PrismaClient } from "@prisma/client";
+import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 
@@ -10,10 +11,10 @@ const DEFAULT_CURRENCY_SYMBOL = "€";
 const CODE_TO_SYMBOL: Record<string, string> = { EUR: "€", USD: "$", GBP: "£" };
 const toSymbol = (currency: string) => CODE_TO_SYMBOL[currency] ?? currency;
 
-async function getOrCreatePreferences(platformId: string) {
-  const existing = await prisma.platform_preferences.findUnique({ where: { platform_id: platformId } });
+async function getOrCreatePreferences(db: PrismaClient, platformId: string) {
+  const existing = await db.platform_preferences.findUnique({ where: { platform_id: platformId } });
   if (existing) return existing;
-  return prisma.platform_preferences.create({
+  return db.platform_preferences.create({
     data: { platform_id: platformId, currency: DEFAULT_CURRENCY_SYMBOL },
   });
 }
@@ -21,10 +22,11 @@ async function getOrCreatePreferences(platformId: string) {
 export async function getSettings(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const [preferences, specialTaxes] = await Promise.all([
-    getOrCreatePreferences(platformId),
-    prisma.special_taxes.findMany({ where: { platform_id: platformId }, orderBy: { name: "asc" } }),
+    getOrCreatePreferences(db, platformId),
+    db.special_taxes.findMany({ where: { platform_id: platformId }, orderBy: { name: "asc" } }),
   ]);
 
   return res.status(200).json({
@@ -39,11 +41,12 @@ export async function getSettings(req: AuthedRequest, res: Response) {
 export async function updateSettings(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { currency, taxRate } = req.body ?? {};
-  await getOrCreatePreferences(platformId);
+  await getOrCreatePreferences(db, platformId);
 
-  const preferences = await prisma.platform_preferences.update({
+  const preferences = await db.platform_preferences.update({
     where: { platform_id: platformId },
     data: {
       ...(typeof currency === "string" ? { currency } : {}),
@@ -59,6 +62,7 @@ export async function updateSettings(req: AuthedRequest, res: Response) {
 export async function createSpecialTax(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { name, pct } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
@@ -68,7 +72,7 @@ export async function createSpecialTax(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "pct is required" });
   }
 
-  const tax = await prisma.special_taxes.create({
+  const tax = await db.special_taxes.create({
     data: { platform_id: platformId, name: name.trim(), tax_rate: pct },
   });
   return res.status(201).json({ specialTax: { id: tax.id, name: tax.name, pct: tax.tax_rate } });
@@ -77,13 +81,14 @@ export async function createSpecialTax(req: AuthedRequest, res: Response) {
 export async function updateSpecialTax(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.special_taxes.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.special_taxes.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Special tax not found" });
 
   const { name, pct } = req.body ?? {};
-  const tax = await prisma.special_taxes.update({
+  const tax = await db.special_taxes.update({
     where: { id },
     data: {
       ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
@@ -96,11 +101,12 @@ export async function updateSpecialTax(req: AuthedRequest, res: Response) {
 export async function deleteSpecialTax(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.special_taxes.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.special_taxes.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Special tax not found" });
 
-  await prisma.special_taxes.delete({ where: { id } });
+  await db.special_taxes.delete({ where: { id } });
   return res.status(204).send();
 }

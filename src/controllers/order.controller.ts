@@ -1,6 +1,6 @@
 import { Response } from "express";
 import { Prisma } from "@prisma/client";
-import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
 import { resolvePlatformId } from "../lib/platform-context";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { AuthedRequest } from "../middleware/auth.middleware";
@@ -14,15 +14,16 @@ const HISTORY_LIMIT = 500;
 export async function listOrders(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
-  const openOrders = await prisma.orders.findMany({
+  const openOrders = await db.orders.findMany({
     where: { platform_id: platformId, closed_ts: null },
     include: { order_lines: true },
     orderBy: { ts: "desc" },
   });
   if (req.query.open === "true") return res.status(200).json({ orders: openOrders });
 
-  const closedOrders = await prisma.orders.findMany({
+  const closedOrders = await db.orders.findMany({
     where: { platform_id: platformId, closed_ts: { not: null } },
     include: { order_lines: true },
     orderBy: { closed_ts: "desc" },
@@ -56,6 +57,7 @@ function parseTimestamp(value: unknown): Date | null {
 export async function listOrderHistory(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const page = parsePositiveInt(req.query.page, 1);
   const pageSize = Math.min(parsePositiveInt(req.query.pageSize, 20), MAX_PAGE_SIZE);
@@ -78,21 +80,21 @@ export async function listOrderHistory(req: AuthedRequest, res: Response) {
   );
 
   const [rows, countRows] = await Promise.all([
-    prisma.$queryRaw<{ key: string }[]>`
+    db.$queryRaw<{ key: string }[]>`
       SELECT ${sessionKey} AS key
       FROM orders WHERE ${filters}
       GROUP BY 1
       ORDER BY MAX(ts) DESC, 1
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
     `,
-    prisma.$queryRaw<{ total: bigint }[]>`
+    db.$queryRaw<{ total: bigint }[]>`
       SELECT COUNT(DISTINCT ${sessionKey}) AS total FROM orders WHERE ${filters}
     `,
   ]);
   const keys = rows.map((r) => r.key);
 
   const orders = keys.length
-    ? await prisma.orders.findMany({
+    ? await db.orders.findMany({
         where: {
           platform_id: platformId,
           OR: [{ id: { in: keys } }, { session_id: { in: keys }, closed_ts: { not: null } }],
@@ -124,6 +126,7 @@ export async function listOrderHistory(req: AuthedRequest, res: Response) {
 export async function getOrderStats(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const from = parseTimestamp(req.query.from);
   const to = parseTimestamp(req.query.to);
@@ -141,9 +144,9 @@ export async function getOrderStats(req: AuthedRequest, res: Response) {
   );
 
   const [totals, recent, bestsellers, oldest] = await Promise.all([
-    prisma.orders.aggregate({ where, _count: { _all: true }, _sum: { total: true } }),
-    prisma.orders.findMany({ where, include: { order_lines: true }, orderBy: { ts: "desc" }, take: 8 }),
-    prisma.$queryRaw<{ item_id: string; name: string; qty: bigint; takings: Prisma.Decimal }[]>`
+    db.orders.aggregate({ where, _count: { _all: true }, _sum: { total: true } }),
+    db.orders.findMany({ where, include: { order_lines: true }, orderBy: { ts: "desc" }, take: 8 }),
+    db.$queryRaw<{ item_id: string; name: string; qty: bigint; takings: Prisma.Decimal }[]>`
       SELECT l.item_id, MAX(l.name) AS name, SUM(l.qty) AS qty, SUM(l.qty * l.price) AS takings
       FROM order_lines l JOIN orders o ON o.id = l.order_id
       WHERE ${lineFilters}
@@ -151,7 +154,7 @@ export async function getOrderStats(req: AuthedRequest, res: Response) {
       ORDER BY qty DESC
       LIMIT 10
     `,
-    prisma.orders.findFirst({ where: { platform_id: platformId }, orderBy: { ts: "asc" }, select: { ts: true } }),
+    db.orders.findFirst({ where: { platform_id: platformId }, orderBy: { ts: "asc" }, select: { ts: true } }),
   ]);
 
   return res.status(200).json({
@@ -187,6 +190,7 @@ function isTimeZone(tz: string) {
 export async function getOrderSeries(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const bucket = typeof req.query.bucket === "string" ? req.query.bucket : "";
   if (!SERIES_BUCKETS.has(bucket)) {
@@ -198,7 +202,7 @@ export async function getOrderSeries(req: AuthedRequest, res: Response) {
   const to = parseTimestamp(req.query.to);
   if (!from || !to) return res.status(400).json({ error: "from and to are required" });
 
-  const rows = await prisma.$queryRaw<{ bucket: string; orders: bigint; takings: Prisma.Decimal }[]>`
+  const rows = await db.$queryRaw<{ bucket: string; orders: bigint; takings: Prisma.Decimal }[]>`
     SELECT to_char(date_trunc(${bucket}, ts AT TIME ZONE ${tz}), 'YYYY-MM-DD"T"HH24') AS bucket,
            COUNT(*) AS orders,
            COALESCE(SUM(total), 0) AS takings
@@ -216,9 +220,10 @@ export async function getOrderSeries(req: AuthedRequest, res: Response) {
 export async function getOrder(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const order = await prisma.orders.findFirst({
+  const order = await db.orders.findFirst({
     where: { id, platform_id: platformId },
     include: { order_lines: true },
   });
@@ -245,9 +250,10 @@ export async function createOrder(req: AuthedRequest, res: Response) {
 export async function updateOrderStatus(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.orders.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.orders.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Order not found" });
 
   const { status } = req.body ?? {};
@@ -256,7 +262,7 @@ export async function updateOrderStatus(req: AuthedRequest, res: Response) {
   }
   const trimmedStatus = status.trim();
 
-  const order = await prisma.orders.update({
+  const order = await db.orders.update({
     where: { id },
     data: {
       status: trimmedStatus,
@@ -274,9 +280,10 @@ export async function updateOrderStatus(req: AuthedRequest, res: Response) {
 export async function addOrderLine(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.orders.findFirst({
+  const existing = await db.orders.findFirst({
     where: { id, platform_id: platformId },
     include: { order_lines: true },
   });
@@ -286,10 +293,10 @@ export async function addOrderLine(req: AuthedRequest, res: Response) {
   if (typeof itemId !== "string") {
     return res.status(400).json({ error: "itemId is required" });
   }
-  const dish = await prisma.menu_items.findFirst({ where: { id: itemId, platform_id: platformId } });
+  const dish = await db.menu_items.findFirst({ where: { id: itemId, platform_id: platformId } });
   if (!dish) return res.status(400).json({ error: "Unknown dish" });
 
-  const order = await prisma.$transaction(async (tx) => {
+  const order = await db.$transaction(async (tx) => {
     const existingLine = existing.order_lines.find((l) => l.item_id === itemId);
     if (existingLine) {
       await tx.order_lines.update({
@@ -317,12 +324,13 @@ export async function addOrderLine(req: AuthedRequest, res: Response) {
 export async function setOrderLineQty(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id, lineId } = req.params;
-  const order = await prisma.orders.findFirst({ where: { id, platform_id: platformId } });
+  const order = await db.orders.findFirst({ where: { id, platform_id: platformId } });
   if (!order) return res.status(404).json({ error: "Order not found" });
 
-  const line = await prisma.order_lines.findFirst({ where: { id: lineId, order_id: id } });
+  const line = await db.order_lines.findFirst({ where: { id: lineId, order_id: id } });
   if (!line) return res.status(404).json({ error: "Order line not found" });
 
   const { qty } = req.body ?? {};
@@ -330,7 +338,7 @@ export async function setOrderLineQty(req: AuthedRequest, res: Response) {
     return res.status(400).json({ error: "qty is required" });
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await db.$transaction(async (tx) => {
     if (qty <= 0) {
       await tx.order_lines.delete({ where: { id: lineId } });
     } else {
@@ -352,12 +360,13 @@ export async function setOrderLineQty(req: AuthedRequest, res: Response) {
 export async function deleteOrder(req: AuthedRequest, res: Response) {
   const platformId = await resolvePlatformId(req.userId as string);
   if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const db = await tenantDb(platformId);
 
   const { id } = req.params;
-  const existing = await prisma.orders.findFirst({ where: { id, platform_id: platformId } });
+  const existing = await db.orders.findFirst({ where: { id, platform_id: platformId } });
   if (!existing) return res.status(404).json({ error: "Order not found" });
 
-  await prisma.orders.delete({ where: { id } });
+  await db.orders.delete({ where: { id } });
   await emitToPlatform(platformId, "order:deleted", { id });
   return res.status(204).send();
 }

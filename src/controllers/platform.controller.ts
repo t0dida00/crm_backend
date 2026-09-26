@@ -2,6 +2,7 @@ import { Response } from "express";
 import prisma from "../config/prisma";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { emitToPlatform } from "../realtime/socket";
+import { publicPusherConfig } from "../lib/platform-connections";
 
 export async function getMyPlatform(req: AuthedRequest, res: Response) {
   const platformUser = await prisma.platform_users.findUnique({
@@ -16,6 +17,7 @@ export async function getMyPlatform(req: AuthedRequest, res: Response) {
   return res.status(200).json({
     platform: platformUser.platforms,
     role: platformUser.role,
+    pusher: await publicPusherConfig(platformUser.platform_id),
   });
 }
 
