@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthedRequest } from '../../src/middleware/auth.middleware';
 import {
+  getOrderStats,
+  listOrderHistory,
   listOrders,
   getOrder,
   createOrder,
@@ -20,7 +22,9 @@ jest.mock('../../src/config/prisma', () => ({
       findMany: jest.fn(),
       findFirst: jest.fn(),
       update: jest.fn(),
+      aggregate: jest.fn(),
     },
+    $queryRaw: jest.fn(),
   },
 }));
 jest.mock('../../src/lib/platform-context');
@@ -130,6 +134,115 @@ describe('Order Controller - Intensive Tests', () => {
       );
 
       await expect(listOrders(mockRequest as AuthedRequest, mockResponse as Response)).rejects.toThrow();
+    });
+  });
+
+  describe('Order History - Pagination', () => {
+    test('should return sessions in key order with the total', async () => {
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([{ key: 'session-1' }, { key: 'order-3' }])
+        .mockResolvedValueOnce([{ total: BigInt(42) }]);
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue([
+        { id: 'order-3', session_id: null, closed_ts: new Date() },
+        { id: 'order-1', session_id: 'session-1', closed_ts: new Date() },
+        { id: 'order-2', session_id: 'session-1', closed_ts: new Date() },
+      ]);
+      mockRequest.query = { page: '2', pageSize: '2' };
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(statusMock).toHaveBeenCalledWith(200);
+      const body = jsonMock.mock.calls[0][0];
+      expect(body.total).toBe(42);
+      expect(body.page).toBe(2);
+      expect(body.pageSize).toBe(2);
+      expect(body.sessions.map((s: { id: string }[]) => s.map((o) => o.id))).toEqual([
+        ['order-1', 'order-2'],
+        ['order-3'],
+      ]);
+    });
+
+    test('should cap pageSize at 100 and default invalid page to 1', async () => {
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ total: BigInt(0) }]);
+      mockRequest.query = { page: 'abc', pageSize: '5000' };
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      const body = jsonMock.mock.calls[0][0];
+      expect(body).toEqual({ sessions: [], total: 0, page: 1, pageSize: 100 });
+      expect(prisma.orders.findMany).not.toHaveBeenCalled();
+    });
+
+    test('should key an open order by its own id, not its session', async () => {
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([{ key: 'open-1' }])
+        .mockResolvedValueOnce([{ total: BigInt(1) }]);
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue([
+        { id: 'open-1', session_id: 'session-9', closed_ts: null },
+      ]);
+      mockRequest.query = { status: 'all' };
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(jsonMock.mock.calls[0][0].sessions).toEqual([
+        [{ id: 'open-1', session_id: 'session-9', closed_ts: null }],
+      ]);
+    });
+
+    test('should return 404 if no platform found', async () => {
+      (platformContext.resolvePlatformId as jest.Mock).mockResolvedValue(null);
+
+      await listOrderHistory(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(statusMock).toHaveBeenCalledWith(404);
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Order Stats', () => {
+    test('should aggregate orders within the requested range', async () => {
+      (prisma.orders.aggregate as jest.Mock).mockResolvedValue({
+        _count: { _all: 3 },
+        _sum: { total: 90 },
+      });
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue([{ id: 'order-1' }]);
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([
+        { item_id: 'dish-1', name: 'Pepsi', qty: BigInt(5), takings: 60 },
+      ]);
+      (prisma.orders.findFirst as jest.Mock).mockResolvedValue({ ts: new Date(0) });
+      mockRequest.query = { from: '1000', to: '2000' };
+
+      await getOrderStats(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(prisma.orders.aggregate).toHaveBeenCalledWith({
+        where: { platform_id: 'platform-123', ts: { gte: new Date(1000), lte: new Date(2000) } },
+        _count: { _all: true },
+        _sum: { total: true },
+      });
+      expect(jsonMock).toHaveBeenCalledWith({
+        orderCount: 3,
+        takings: 90,
+        recent: [{ id: 'order-1' }],
+        bestsellers: [{ itemId: 'dish-1', name: 'Pepsi', qty: 5, takings: 60 }],
+        oldestTs: new Date(0),
+      });
+    });
+
+    test('should ignore an invalid range bound', async () => {
+      (prisma.orders.aggregate as jest.Mock).mockResolvedValue({ _count: { _all: 0 }, _sum: { total: null } });
+      (prisma.orders.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
+      (prisma.orders.findFirst as jest.Mock).mockResolvedValue(null);
+      mockRequest.query = { from: 'abc' };
+
+      await getOrderStats(mockRequest as AuthedRequest, mockResponse as Response);
+
+      expect(prisma.orders.aggregate).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { platform_id: 'platform-123' } }),
+      );
+      expect(jsonMock.mock.calls[0][0]).toMatchObject({ orderCount: 0, takings: 0, oldestTs: null });
     });
   });
 

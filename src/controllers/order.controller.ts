@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { Prisma } from "@prisma/client";
 import prisma from "../config/prisma";
 import { resolvePlatformId } from "../lib/platform-context";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
@@ -28,6 +29,138 @@ export async function listOrders(req: AuthedRequest, res: Response) {
     take: HISTORY_LIMIT,
   });
   return res.status(200).json({ orders: [...openOrders, ...closedOrders] });
+}
+
+const MAX_PAGE_SIZE = 100;
+
+function parsePositiveInt(value: unknown, fallback: number) {
+  const n = typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Parses an epoch-ms query param into a Date, or null if absent/invalid. */
+function parseTimestamp(value: unknown): Date | null {
+  if (typeof value !== "string" || !value) return null;
+  const ms = Number(value);
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
+/**
+ * Paginated order history, one entry per session — the same grouping the UI
+ * uses: closed orders collapse by `session_id` (or stand alone when they have
+ * none), and with `status=all` each open order is its own entry too. Entries are
+ * sorted newest first by their latest order `ts`; `q` matches order code or table
+ * name. Paging happens in SQL so a platform's history never loads in full.
+ */
+export async function listOrderHistory(req: AuthedRequest, res: Response) {
+  const platformId = await resolvePlatformId(req.userId as string);
+  if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+
+  const page = parsePositiveInt(req.query.page, 1);
+  const pageSize = Math.min(parsePositiveInt(req.query.pageSize, 20), MAX_PAGE_SIZE);
+  const includeOpen = req.query.status === "all";
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+  const sessionKey = Prisma.sql`CASE WHEN closed_ts IS NULL THEN id ELSE COALESCE(session_id, id) END`;
+  const filters = Prisma.join(
+    [
+      Prisma.sql`platform_id = ${platformId}::uuid`,
+      ...(includeOpen ? [] : [Prisma.sql`closed_ts IS NOT NULL`]),
+      ...(q ? [Prisma.sql`(code ILIKE ${pattern} OR table_name ILIKE ${pattern})`] : []),
+    ],
+    " AND ",
+  );
+
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<{ key: string }[]>`
+      SELECT ${sessionKey} AS key
+      FROM orders WHERE ${filters}
+      GROUP BY 1
+      ORDER BY MAX(ts) DESC, 1
+      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+    `,
+    prisma.$queryRaw<{ total: bigint }[]>`
+      SELECT COUNT(DISTINCT ${sessionKey}) AS total FROM orders WHERE ${filters}
+    `,
+  ]);
+  const keys = rows.map((r) => r.key);
+
+  const orders = keys.length
+    ? await prisma.orders.findMany({
+        where: {
+          platform_id: platformId,
+          OR: [{ id: { in: keys } }, { session_id: { in: keys }, closed_ts: { not: null } }],
+        },
+        include: { order_lines: true },
+        orderBy: { ts: "desc" },
+      })
+    : [];
+
+  const byKey = new Map<string, typeof orders>(keys.map((k) => [k, []]));
+  for (const order of orders) {
+    const key = order.closed_ts ? (order.session_id ?? order.id) : order.id;
+    byKey.get(key)?.push(order);
+  }
+
+  return res.status(200).json({
+    sessions: keys.map((k) => byKey.get(k) ?? []).filter((s) => s.length > 0),
+    total: Number(countRows[0]?.total ?? 0),
+    page,
+    pageSize,
+  });
+}
+
+/**
+ * Dashboard figures for orders placed (`ts`) within [from, to] — counts, takings
+ * and bestsellers are aggregated in SQL rather than over a client-side order
+ * list, which only holds recent history.
+ */
+export async function getOrderStats(req: AuthedRequest, res: Response) {
+  const platformId = await resolvePlatformId(req.userId as string);
+  if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+
+  const from = parseTimestamp(req.query.from);
+  const to = parseTimestamp(req.query.to);
+  const where = {
+    platform_id: platformId,
+    ...(from || to ? { ts: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+  };
+  const lineFilters = Prisma.join(
+    [
+      Prisma.sql`o.platform_id = ${platformId}::uuid`,
+      ...(from ? [Prisma.sql`o.ts >= ${from}`] : []),
+      ...(to ? [Prisma.sql`o.ts <= ${to}`] : []),
+    ],
+    " AND ",
+  );
+
+  const [totals, recent, bestsellers, oldest] = await Promise.all([
+    prisma.orders.aggregate({ where, _count: { _all: true }, _sum: { total: true } }),
+    prisma.orders.findMany({ where, include: { order_lines: true }, orderBy: { ts: "desc" }, take: 8 }),
+    prisma.$queryRaw<{ item_id: string; name: string; qty: bigint; takings: Prisma.Decimal }[]>`
+      SELECT l.item_id, MAX(l.name) AS name, SUM(l.qty) AS qty, SUM(l.qty * l.price) AS takings
+      FROM order_lines l JOIN orders o ON o.id = l.order_id
+      WHERE ${lineFilters}
+      GROUP BY l.item_id
+      ORDER BY qty DESC
+      LIMIT 10
+    `,
+    prisma.orders.findFirst({ where: { platform_id: platformId }, orderBy: { ts: "asc" }, select: { ts: true } }),
+  ]);
+
+  return res.status(200).json({
+    orderCount: totals._count._all,
+    takings: Number(totals._sum.total ?? 0),
+    recent,
+    bestsellers: bestsellers.map((b) => ({
+      itemId: b.item_id,
+      name: b.name,
+      qty: Number(b.qty),
+      takings: Number(b.takings),
+    })),
+    oldestTs: oldest?.ts ?? null,
+  });
 }
 
 export async function getOrder(req: AuthedRequest, res: Response) {

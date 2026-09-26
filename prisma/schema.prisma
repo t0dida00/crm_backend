@@ -197,6 +197,9 @@ model orders {
   order_lines    order_lines[]
 
   @@unique([platform_id, code], map: "unique_order_code_per_platform")
+  @@index([platform_id, ts], map: "idx_orders_platform_ts")
+  @@index([platform_id, closed_ts], map: "idx_orders_platform_closed_ts")
+  @@index([session_id], map: "idx_orders_session")
 }
 
 model order_lines {
@@ -211,6 +214,8 @@ model order_lines {
   updated_at DateTime   @default(now()) @db.Timestamptz(6)
   orders     orders     @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_order_line_order")
   menu_items menu_items @relation(fields: [item_id], references: [id], onUpdate: NoAction, map: "fk_order_line_item")
+
+  @@index([order_id], map: "idx_order_lines_order")
 }
 
 model bookings {
