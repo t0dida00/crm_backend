@@ -6,12 +6,13 @@ import {
   updateCategory,
 } from "../controllers/category.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { requireOwner } from "../middleware/require-owner";
 
 const router = Router();
 
 router.get("/categories", requireAuth, listCategories);
-router.post("/categories", requireAuth, createCategory);
-router.patch("/categories/:id", requireAuth, updateCategory);
-router.delete("/categories/:id", requireAuth, deleteCategory);
+router.post("/categories", requireAuth, requireOwner, createCategory);
+router.patch("/categories/:id", requireAuth, requireOwner, updateCategory);
+router.delete("/categories/:id", requireAuth, requireOwner, deleteCategory);
 
 export default router;

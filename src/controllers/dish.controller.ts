@@ -1,7 +1,7 @@
 import { Response } from "express";
 import { DishStatus } from "@prisma/client";
 import { tenantDb } from "../config/tenant-db";
-import { resolvePlatformId } from "../lib/platform-context";
+import { resolvePlatformId, resolvePlatformMembership } from "../lib/platform-context";
 import { AuthedRequest } from "../middleware/auth.middleware";
 import { isNonNegative, MAX_SPECIAL_TAX } from "../lib/validation";
 
@@ -70,9 +70,13 @@ export async function createDish(req: AuthedRequest, res: Response) {
 }
 
 export async function updateDish(req: AuthedRequest, res: Response) {
-  const platformId = await resolvePlatformId(req.userId as string);
-  if (!platformId) return res.status(404).json({ error: "No platform found for this user" });
+  const membership = await resolvePlatformMembership(req.userId as string);
+  if (!membership) return res.status(404).json({ error: "No platform found for this user" });
+  const { platformId } = membership;
   const db = await tenantDb(platformId);
+  // Staff only mark a dish available / sold out / hidden: everything else they
+  // send (price, name, tax...) is ignored, even from a direct API call.
+  const body = membership.role === "OWNER" ? (req.body ?? {}) : { status: req.body?.status };
 
   const { id } = req.params;
   const existing = await db.menu_items.findFirst({ where: { id, platform_id: platformId } });
@@ -89,7 +93,7 @@ export async function updateDish(req: AuthedRequest, res: Response) {
     imageUrl,
     isVegan,
     status,
-  } = req.body ?? {};
+  } = body;
 
   if (status !== undefined && !isDishStatus(status)) {
     return res.status(400).json({ error: "status must be one of valid, sold_out, hidden" });
