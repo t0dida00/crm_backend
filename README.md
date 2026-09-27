@@ -219,7 +219,7 @@ src/
                            about calls this after committing
   controllers/             one file per resource (auth, platform, table,
                            category, dish, order, booking, settings,
-                           table-request, public)
+                           table-request, staff, connection, upload, public)
   routes/                  thin Router wiring per resource, mirrors controllers
 prisma/
   schema.prisma            models below
@@ -271,8 +271,8 @@ central database keeps only what's needed to sign in and find the business:
 A business that hasn't connected one keeps all of this in the central database. Controllers get that business's client from
 `tenantDb(platformId)`; central tables always use `prisma`.
 
-The owner connects services in the app (onboarding step 2, or Settings →
-Connections), through these OWNER-only routes:
+The owner connects services in the app (onboarding step 1, before the
+business exists, or Settings → Connections), through these OWNER-only routes:
 
 | Route | Does |
 |---|---|
