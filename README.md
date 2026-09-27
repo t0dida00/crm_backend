@@ -363,10 +363,10 @@ Events currently published:
 
 | Event | Emitted from |
 |---|---|
-| `order:created` | `order-placement.ts` (both staff and guest order creation) |
+| `order:created` | `order-placement.ts` (both staff and guest order creation). Payloads carry the full order with `order_lines`: staff screens apply them as they are |
 | `order:updated` | status change, line added, line qty changed |
 | `order:deleted` | order deleted |
-| `table:updated` | seat / free |
+| `table:updated` | seat / free, and an order that seats its table (staff screens apply payloads instead of refetching, so this must be sent) |
 | `table:checked_out` | checkout (bulk-closes orders; listeners should refetch rather than expect a per-order payload) |
 | `table_request:created` | guest raises a call-staff/checkout request |
 | `table_request:resolved` | staff resolves a request |
