@@ -1,21 +1,22 @@
 import prisma from "../config/prisma";
 import { decrypt } from "./crypto";
-import type { PusherCredentials } from "./connection-input";
+import type { PusherCredentials, StorageConfig } from "./connection-input";
 
 export interface ResolvedConnection {
   databaseUrl: string | null;
   pusher: PusherCredentials | null;
+  storage: StorageConfig | null;
 }
 
-const NONE: ResolvedConnection = { databaseUrl: null, pusher: null };
+const NONE: ResolvedConnection = { databaseUrl: null, pusher: null, storage: null };
 /** Other serverless instances pick up a changed connection within this long. */
 const TTL_MS = 30_000;
 const cache = new Map<string, { value: ResolvedConnection; expires: number }>();
 
-/** Whether a business without its own database/Pusher may use the shared ones. */
+/** Whether a business without its own database/Pusher/storage may use the shared ones. */
 export const sharedInfraAllowed = () => process.env.ALLOW_SHARED_INFRA !== "false";
 
-/** A business's decrypted database URL and Pusher credentials (nulls = shared). Cached briefly. */
+/** A business's decrypted database URL, Pusher credentials and storage (nulls = shared). Cached briefly. */
 export async function getConnection(platformId: string): Promise<ResolvedConnection> {
   const hit = cache.get(platformId);
   if (hit && hit.expires > Date.now()) return hit.value;
@@ -33,6 +34,7 @@ export async function getConnection(platformId: string): Promise<ResolvedConnect
                 secret: decrypt(row.pusher_secret_enc),
               }
             : null,
+        storage: row.storage_config_enc ? (JSON.parse(decrypt(row.storage_config_enc)) as StorageConfig) : null,
       }
     : NONE;
   cache.set(platformId, { value, expires: Date.now() + TTL_MS });

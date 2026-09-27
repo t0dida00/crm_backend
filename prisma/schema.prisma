@@ -257,7 +257,7 @@ model table_requests {
 /// A business's own infrastructure (central database only). Secrets are
 /// AES-256-GCM encrypted with CREDENTIALS_KEY (src/lib/crypto.ts) and never
 /// returned by the API. No row, or null columns, means the business uses the
-/// shared DATABASE_URL / PUSHER_* from the environment.
+/// shared DATABASE_URL / PUSHER_* / BLOB_READ_WRITE_TOKEN from the environment.
 model platform_connections {
   id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   platform_id          String    @unique @db.Uuid
@@ -271,6 +271,13 @@ model platform_connections {
   pusher_cluster       String?   @db.VarChar(30)
   pusher_secret_enc    String?
   pusher_verified_at   DateTime? @db.Timestamptz(6)
+  /// "vercel_blob" or "s3"
+  storage_provider     String?   @db.VarChar(20)
+  /// e.g. "Vercel Blob · store abc" or "bucket · host", shown to the owner.
+  storage_label        String?   @db.VarChar(255)
+  /// The whole StorageConfig (src/lib/connection-input.ts) as encrypted JSON.
+  storage_config_enc   String?
+  storage_verified_at  DateTime? @db.Timestamptz(6)
   created_at           DateTime  @default(now()) @db.Timestamptz(6)
   updated_at           DateTime  @default(now()) @db.Timestamptz(6)
   platforms            platforms @relation(fields: [platform_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_connection_platform")

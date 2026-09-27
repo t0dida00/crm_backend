@@ -1,4 +1,4 @@
-import { describePusherError, provisionTenantDatabase, verifyPusher } from '../../src/lib/tenant-provision';
+import { checkTenantDatabase, describePusherError, provisionTenantDatabase, verifyPusher } from '../../src/lib/tenant-provision';
 
 const platform = {
   id: 'p1',
@@ -72,6 +72,26 @@ describe('provisionTenantDatabase', () => {
       "Couldn't connect to the database: password authentication failed",
     );
     expect(client.end).toHaveBeenCalled();
+  });
+});
+
+describe('checkTenantDatabase', () => {
+  it('accepts an empty database without writing to it', async () => {
+    const { client, queries, make } = fakeClient({ tables: 0 });
+    await expect(checkTenantDatabase('postgresql://x/db', null, make)).resolves.toBeUndefined();
+    expect(queries.some((q) => /BEGIN|CREATE|INSERT|UPDATE/.test(q))).toBe(false);
+    expect(client.end).toHaveBeenCalled();
+  });
+
+  it("accepts this business's own database, but not before the business exists", async () => {
+    await expect(checkTenantDatabase('postgresql://x/db', 'p1', fakeClient({ tables: 16, owner: 'p1' }).make)).resolves.toBeUndefined();
+    await expect(checkTenantDatabase('postgresql://x/db', null, fakeClient({ tables: 16, owner: 'p1' }).make)).rejects.toThrow(
+      /another business/,
+    );
+  });
+
+  it('refuses a database with unrelated tables', async () => {
+    await expect(checkTenantDatabase('postgresql://x/db', null, fakeClient({ tables: 3 }).make)).rejects.toThrow(/already has tables/);
   });
 });
 

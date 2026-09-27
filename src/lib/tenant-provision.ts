@@ -41,10 +41,48 @@ export async function testDatabase(url: string, makeClient = defaultClient): Pro
 }
 
 /**
+ * Whether a database can become this business's: "empty", or "ours" (this
+ * business set it up before). Anything else throws, so a database with someone
+ * else's tables is never written to. `platformId` is null before the business
+ * exists, when only an empty database will do.
+ */
+async function inspectDatabase(client: Client, platformId: string | null): Promise<"empty" | "ours"> {
+  const { rows } = await client.query<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+  );
+  if (Number(rows[0]?.count ?? 0) === 0) return "empty";
+  const owner = await client
+    .query<{ platform_id: string }>('SELECT "platform_id" FROM "tenant_meta" LIMIT 1')
+    .catch(() => ({ rows: [] as { platform_id: string }[] }));
+  if (platformId && owner.rows[0]?.platform_id === platformId) return "ours";
+  throw new ConnectionInputError(
+    owner.rows.length
+      ? "This database belongs to another business."
+      : "This database already has tables. Use an empty database.",
+  );
+}
+
+/**
+ * Checks, without writing anything, that `provisionTenantDatabase` would
+ * accept this database: it connects and is empty (or this business's own).
+ */
+export async function checkTenantDatabase(
+  url: string,
+  platformId: string | null,
+  makeClient = defaultClient,
+): Promise<void> {
+  const client = await open(url, makeClient);
+  try {
+    await inspectDatabase(client, platformId);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
  * Prepares a business's own database: creates every table, then records which
  * business it belongs to. An empty database is set up; one this business set
- * up before is accepted as is; anything else is refused, so a database with
- * someone else's tables is never written to.
+ * up before is accepted as is; anything else is refused (see inspectDatabase).
  */
 export async function provisionTenantDatabase(
   url: string,
@@ -53,27 +91,14 @@ export async function provisionTenantDatabase(
 ): Promise<{ created: boolean }> {
   const client = await open(url, makeClient);
   try {
-    const { rows } = await client.query<{ count: string }>(
-      "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
-    );
-    if (Number(rows[0]?.count ?? 0) > 0) {
-      const owner = await client
-        .query<{ platform_id: string }>('SELECT "platform_id" FROM "tenant_meta" LIMIT 1')
-        .catch(() => ({ rows: [] as { platform_id: string }[] }));
-      if (owner.rows[0]?.platform_id === platform.id) {
-        // Reconnecting a database this business set up before: bring its name
-        // and profile up to date.
-        await client.query(
-          'UPDATE "platforms" SET "name" = $2, "phone" = $3, "email" = $4, "address" = $5, "logo_url" = $6 WHERE "id" = $1',
-          [platform.id, platform.name, platform.profile.phone, platform.profile.email, platform.profile.address, platform.profile.logo_url],
-        );
-        return { created: false };
-      }
-      throw new ConnectionInputError(
-        owner.rows.length
-          ? "This database belongs to another business."
-          : "This database already has tables. Use an empty database.",
+    if ((await inspectDatabase(client, platform.id)) === "ours") {
+      // Reconnecting a database this business set up before: bring its name
+      // and profile up to date.
+      await client.query(
+        'UPDATE "platforms" SET "name" = $2, "phone" = $3, "email" = $4, "address" = $5, "logo_url" = $6 WHERE "id" = $1',
+        [platform.id, platform.name, platform.profile.phone, platform.profile.email, platform.profile.address, platform.profile.logo_url],
       );
+      return { created: false };
     }
 
     try {

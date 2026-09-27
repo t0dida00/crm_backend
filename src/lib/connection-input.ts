@@ -27,6 +27,17 @@ export function isPrivateAddress(ip: string): boolean {
   return v6 === "::" || v6 === "::1" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || /^ff/.test(v6);
 }
 
+type Resolve = typeof lookup;
+
+/** Throws unless `host` resolves only to public addresses; `what` names it in the message. */
+async function checkPublicHost(host: string, what: string, resolve: Resolve) {
+  const addresses = isIP(host) ? [host] : (await resolve(host, { all: true }).catch(() => [])).map((a) => a.address);
+  if (addresses.length === 0) throw new ConnectionInputError(`${what} host can't be found`);
+  if (addresses.some(isPrivateAddress)) {
+    throw new ConnectionInputError(`${what} host must be publicly reachable`);
+  }
+}
+
 export interface CheckedDatabaseUrl {
   url: string;
   /** "host/database", shown to the owner instead of the URL. */
@@ -61,11 +72,7 @@ export async function checkDatabaseUrl(
     if (!SSL_MODES.has(url.searchParams.get("sslmode") ?? "")) {
       throw new ConnectionInputError("Database URL must use SSL (add ?sslmode=require)");
     }
-    const addresses = isIP(host) ? [host] : (await resolve(host, { all: true }).catch(() => [])).map((a) => a.address);
-    if (addresses.length === 0) throw new ConnectionInputError("Database host can't be found");
-    if (addresses.some(isPrivateAddress)) {
-      throw new ConnectionInputError("Database host must be publicly reachable");
-    }
+    await checkPublicHost(host, "Database", resolve);
   }
 
   return { url: url.toString(), label: `${host}/${database}` };
@@ -88,4 +95,90 @@ export function checkPusherCredentials(body: unknown): PusherCredentials {
   if (!/^[A-Za-z0-9]{8,64}$/.test(creds.secret)) throw new ConnectionInputError("Pusher secret looks wrong");
   if (!/^[a-z0-9-]{2,20}$/.test(creds.cluster)) throw new ConnectionInputError("Pusher cluster looks wrong (e.g. eu, ap1)");
   return creds;
+}
+
+export interface S3StorageConfig {
+  provider: "s3";
+  /** e.g. https://<account>.r2.cloudflarestorage.com or https://s3.eu-west-1.amazonaws.com */
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  /** Where the bucket's files can be read publicly, without a trailing slash. */
+  publicUrl: string;
+}
+
+export interface VercelBlobStorageConfig {
+  provider: "vercel_blob";
+  token: string;
+}
+
+/** Where a business's images go. Stored encrypted as a whole. */
+export type StorageConfig = VercelBlobStorageConfig | S3StorageConfig;
+
+const BLOB_TOKEN = /^vercel_blob_rw_([A-Za-z0-9]+)_[A-Za-z0-9]+$/;
+
+/** An http(s) URL with nothing but an origin and an optional path; https only in production. */
+async function checkServiceUrl(raw: string, what: string, production: boolean, resolve: Resolve): Promise<string> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConnectionInputError(`${what} isn't a valid URL`);
+  }
+  const allowed = production ? ["https:"] : ["https:", "http:"];
+  if (!allowed.includes(url.protocol)) throw new ConnectionInputError(`${what} must start with https://`);
+  if (url.username || url.password || url.search || url.hash) {
+    throw new ConnectionInputError(`${what} must be a plain address, without a login or ?query`);
+  }
+  if (production) await checkPublicHost(url.hostname.replace(/^\[|\]$/g, ""), what, resolve);
+  return url.toString().replace(/\/+$/, "");
+}
+
+/**
+ * Validates the storage an owner connects: `{ provider: "vercel_blob", token }`
+ * or `{ provider: "s3", endpoint, region, bucket, accessKeyId, secretAccessKey,
+ * publicUrl }`. As with the database, production requires https and public
+ * hosts, since the API connects to the endpoint and reads from the public URL.
+ */
+export async function checkStorageConfig(
+  body: unknown,
+  { production = process.env.NODE_ENV === "production", resolve = lookup } = {},
+): Promise<StorageConfig> {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  const clean = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+
+  if (fields.provider === "vercel_blob") {
+    const token = clean(fields.token);
+    if (!BLOB_TOKEN.test(token)) throw new ConnectionInputError("Vercel Blob token looks wrong (it starts with vercel_blob_rw_)");
+    return { provider: "vercel_blob", token };
+  }
+  if (fields.provider !== "s3") throw new ConnectionInputError("Choose where images are stored");
+
+  const [endpoint, publicUrl] = [clean(fields.endpoint), clean(fields.publicUrl)];
+  if (!endpoint) throw new ConnectionInputError("Storage endpoint is required");
+  if (!publicUrl) throw new ConnectionInputError("Public URL is required");
+  const config: S3StorageConfig = {
+    provider: "s3",
+    endpoint: await checkServiceUrl(endpoint, "Storage endpoint", production, resolve),
+    region: clean(fields.region) || "auto",
+    bucket: clean(fields.bucket),
+    accessKeyId: clean(fields.accessKeyId),
+    secretAccessKey: clean(fields.secretAccessKey),
+    publicUrl: await checkServiceUrl(publicUrl, "Public URL", production, resolve),
+  };
+  if (!/^[a-z0-9-]{2,30}$/.test(config.region)) throw new ConnectionInputError("Region looks wrong (e.g. auto, eu-west-1)");
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(config.bucket)) {
+    throw new ConnectionInputError("Bucket name looks wrong (lowercase letters, numbers, dots and dashes)");
+  }
+  if (!/^[A-Za-z0-9]{8,128}$/.test(config.accessKeyId)) throw new ConnectionInputError("Access key ID looks wrong");
+  if (!/^\S{8,256}$/.test(config.secretAccessKey)) throw new ConnectionInputError("Secret access key looks wrong");
+  return config;
+}
+
+/** What the owner sees about their storage: never the token or keys. */
+export function storageLabel(config: StorageConfig): string {
+  if (config.provider === "vercel_blob") return `Vercel Blob · store ${config.token.match(BLOB_TOKEN)?.[1] ?? ""}`;
+  return `${config.bucket} · ${new URL(config.publicUrl).host}`;
 }

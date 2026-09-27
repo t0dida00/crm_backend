@@ -1,8 +1,10 @@
 import {
   checkDatabaseUrl,
   checkPusherCredentials,
+  checkStorageConfig,
   ConnectionInputError,
   isPrivateAddress,
+  storageLabel,
 } from '../../src/lib/connection-input';
 
 const publicDns = async () => [{ address: '203.0.113.10', family: 4 }];
@@ -75,5 +77,65 @@ describe('checkPusherCredentials', () => {
     [{ ...valid, cluster: 'evil.com/x' }, /cluster/],
   ])('rejects bad input %#', (body, message) => {
     expect(() => checkPusherCredentials(body)).toThrow(message);
+  });
+});
+
+describe('checkStorageConfig', () => {
+  const s3 = {
+    provider: 's3',
+    endpoint: 'https://acc.r2.cloudflarestorage.com/',
+    region: '',
+    bucket: 'menu-photos',
+    accessKeyId: 'AKIAEXAMPLE123',
+    secretAccessKey: 'sup3r-s3cret-key',
+    publicUrl: ' https://pub-123.r2.dev/ ',
+  };
+  const TOKEN = 'vercel_blob_rw_AbC123store_s3cr3tPart';
+
+  it('accepts a Vercel Blob token', async () => {
+    await expect(checkStorageConfig({ provider: 'vercel_blob', token: ` ${TOKEN} ` })).resolves.toEqual({
+      provider: 'vercel_blob',
+      token: TOKEN,
+    });
+  });
+
+  it('trims S3 details, drops trailing slashes and defaults the region to auto', async () => {
+    await expect(checkStorageConfig(s3, { production: true, resolve: publicDns as never })).resolves.toEqual({
+      ...s3,
+      endpoint: 'https://acc.r2.cloudflarestorage.com',
+      region: 'auto',
+      publicUrl: 'https://pub-123.r2.dev',
+    });
+  });
+
+  it.each([
+    [undefined, /Choose where/],
+    [{ provider: 'ftp' }, /Choose where/],
+    [{ provider: 'vercel_blob', token: 'abc' }, /vercel_blob_rw_/],
+    [{ ...s3, endpoint: '' }, /endpoint is required/],
+    [{ ...s3, publicUrl: 'not a url' }, /Public URL isn't a valid URL/],
+    [{ ...s3, endpoint: 'ftp://x.example.com' }, /must start with https/],
+    [{ ...s3, publicUrl: 'https://user:pw@cdn.example.com' }, /plain address/],
+    [{ ...s3, bucket: 'Bad_Bucket' }, /Bucket name/],
+    [{ ...s3, region: 'EU WEST' }, /Region/],
+    [{ ...s3, accessKeyId: 'x' }, /Access key ID/],
+    [{ ...s3, secretAccessKey: 'short' }, /Secret access key/],
+  ])('rejects bad input %#', async (body, message) => {
+    await expect(checkStorageConfig(body, { production: false })).rejects.toThrow(message);
+  });
+
+  it('allows http and local hosts only outside production', async () => {
+    const local = { ...s3, endpoint: 'http://localhost:9000', publicUrl: 'http://localhost:9000/menu-photos' };
+    await expect(checkStorageConfig(local, { production: false })).resolves.toMatchObject({ endpoint: 'http://localhost:9000' });
+    await expect(checkStorageConfig(local, { production: true })).rejects.toThrow(/https/);
+    await expect(
+      checkStorageConfig({ ...s3, endpoint: 'https://internal.example.com' }, { production: true, resolve: privateDns as never }),
+    ).rejects.toThrow('Storage endpoint host must be publicly reachable');
+  });
+
+  it('labels storage without its secrets', () => {
+    expect(storageLabel({ provider: 'vercel_blob', token: TOKEN })).toBe('Vercel Blob · store AbC123store');
+    const label = storageLabel({ ...s3, provider: 's3', publicUrl: 'https://pub-123.r2.dev' });
+    expect(label).toBe('menu-photos · pub-123.r2.dev');
   });
 });
