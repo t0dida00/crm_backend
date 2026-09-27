@@ -14,8 +14,16 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const signToken = (user: { id: string; email: string | null }, role: string | null) =>
   jwt.sign({ sub: user.id, email: user.email, role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
+const INVALID_LOGIN = { error: "Invalid email or password" };
+
+/**
+ * Signs in with email and password. `signInAs` ("owner" | "staff", optional)
+ * is the sign-in page's choice: an account of the other kind is refused
+ * exactly like a wrong password, so the page never reveals which kind an
+ * email is. Owners include new ones who haven't created their business yet.
+ */
 export async function login(req: Request, res: Response) {
-  const { email, password } = req.body ?? {};
+  const { email, password, signInAs } = req.body ?? {};
 
   if (typeof email !== "string" || typeof password !== "string") {
     return res.status(400).json({ error: "Email and password are required" });
@@ -26,12 +34,20 @@ export async function login(req: Request, res: Response) {
   const user = account?.user;
 
   if (!user || !user.is_active) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json(INVALID_LOGIN);
   }
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
   if (!passwordMatches) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json(INVALID_LOGIN);
+  }
+
+  const membership = await findMembership(user.id);
+
+  // Checked before any other refusal, so a wrong choice never learns more.
+  if (signInAs === "owner" || signInAs === "staff") {
+    const isStaff = membership?.role === "STAFF";
+    if ((signInAs === "staff") !== isStaff) return res.status(401).json(INVALID_LOGIN);
   }
 
   // Owners live in the central database; staff in a business's own never need review.
@@ -41,8 +57,6 @@ export async function login(req: Request, res: Response) {
       message: "Your account is being reviewed. We'll let you know by email once it's approved.",
     });
   }
-
-  const membership = await findMembership(user.id);
 
   // A membership that exists but is inactive means an owner disabled this
   // account (or it was left behind when the business moved to its own

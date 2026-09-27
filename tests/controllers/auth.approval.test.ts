@@ -77,3 +77,53 @@ describe('login while accounts need approval', () => {
     expect(db.account_approvals.findUnique).not.toHaveBeenCalled();
   });
 });
+
+describe('login with the sign-in page\'s Owner / Staff choice', () => {
+  const callAs = async (signInAs: string | undefined, password = 'longenough') => {
+    const json = jest.fn();
+    const status = jest.fn().mockReturnValue({ json });
+    const body = { email: 'ana@example.com', password, ...(signInAs ? { signInAs } : {}) };
+    await login({ body } as Request, { status } as unknown as Response);
+    return { status: status.mock.calls[0]?.[0], body: json.mock.calls[0]?.[0] };
+  };
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    db.user.findFirst.mockResolvedValue(OWNER);
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    (jwt.sign as jest.Mock).mockReturnValue('token-1');
+  });
+
+  it.each([
+    ['an owner as Owner', { role: 'OWNER', is_active: true, platform_id: 'p1' }, 'owner', 200],
+    ['a new owner with no business as Owner', null, 'owner', 200],
+    ['a staff member as Staff', { role: 'STAFF', is_active: true, platform_id: 'p1' }, 'staff', 200],
+    ['an owner as Staff', { role: 'OWNER', is_active: true, platform_id: 'p1' }, 'staff', 401],
+    ['a new owner as Staff', null, 'staff', 401],
+    ['a staff member as Owner', { role: 'STAFF', is_active: true, platform_id: 'p1' }, 'owner', 401],
+  ])('%s → %s', async (_label, membership, signInAs, expected) => {
+    db.platform_users.findUnique.mockResolvedValue(membership);
+    const res = await callAs(signInAs);
+    expect(res.status).toBe(expected);
+  });
+
+  it('refuses the wrong choice exactly like a wrong password', async () => {
+    db.platform_users.findUnique.mockResolvedValue({ role: 'STAFF', is_active: true, platform_id: 'p1' });
+    const wrongChoice = await callAs('owner');
+    (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+    const wrongPassword = await callAs('staff', 'nope-nope');
+    expect(wrongChoice).toEqual(wrongPassword);
+    expect(jwt.sign).not.toHaveBeenCalled();
+  });
+
+  it("doesn't reveal a disabled account to the wrong choice", async () => {
+    db.platform_users.findUnique.mockResolvedValue({ role: 'STAFF', is_active: false, platform_id: 'p1' });
+    expect((await callAs('owner')).status).toBe(401);
+    expect((await callAs('staff')).status).toBe(403);
+  });
+
+  it('checks nothing extra without a choice (older clients)', async () => {
+    db.platform_users.findUnique.mockResolvedValue({ role: 'STAFF', is_active: true, platform_id: 'p1' });
+    expect((await callAs(undefined)).status).toBe(200);
+  });
+});
