@@ -4,6 +4,10 @@ import { createBooking } from '../../src/controllers/booking.controller';
 import prisma from '../../src/config/prisma';
 import * as platformContext from '../../src/lib/platform-context';
 
+// Business data goes through tenantDb(); in tests it's the same mocked client.
+jest.mock('../../src/config/tenant-db', () => ({
+  tenantDb: async () => jest.requireMock('../../src/config/prisma').default,
+}));
 jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
@@ -59,7 +63,8 @@ describe('Booking Controller - createBooking', () => {
     [{ name: '', time: '19:00', party: 2 }, 'name is required'],
     [{ name: 'Khoa', time: '7pm', party: 2 }, 'time must be HH:MM'],
     [{ name: 'Khoa', time: '24:00', party: 2 }, 'time must be HH:MM'],
-    [{ name: 'Khoa', time: '19:00', party: 0 }, 'party must be a positive number'],
+    [{ name: 'Khoa', time: '19:00', party: 0 }, 'party must be a whole number from 1'],
+    [{ name: 'Khoa', time: '19:00', party: 2.5 }, 'party must be a whole number from 1'],
     [{ name: 'Khoa', time: '19:00', party: 2, date: '30/09/2026' }, 'date must be YYYY-MM-DD'],
     [{ name: 'Khoa', time: '19:00', party: 2, date: '2026-02-30' }, 'date must be YYYY-MM-DD'],
     [{ name: 'Khoa', time: '19:00', party: 2, date: 20260930 }, 'date must be YYYY-MM-DD'],

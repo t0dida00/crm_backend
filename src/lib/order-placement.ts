@@ -1,5 +1,6 @@
-import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
 import { emitToPlatform } from "../realtime/socket";
+import { isCount } from "./validation";
 
 interface OrderLineInput {
   itemId: string;
@@ -38,7 +39,8 @@ export async function placeOrderForTable(
     throw new OrderPlacementError(400, "lines must be a non-empty array");
   }
 
-  const table = await prisma.tables.findFirst({
+  const db = await tenantDb(platformId);
+  const table = await db.tables.findFirst({
     where: { platform_id: platformId, name: tableName.trim() },
   });
 
@@ -49,14 +51,14 @@ export async function placeOrderForTable(
   // session, the loser's insert violates it and we just re-read the winner's row.
   let sessionId: string | null = null;
   if (table) {
-    const openSession = await prisma.table_sessions.findFirst({
+    const openSession = await db.table_sessions.findFirst({
       where: { table_id: table.id, closed_at: null },
     });
     if (openSession) {
       sessionId = openSession.id;
     } else {
       try {
-        const created = await prisma.table_sessions.create({
+        const created = await db.table_sessions.create({
           data: { platform_id: platformId, table_id: table.id, table_name: table.name },
         });
         sessionId = created.id;
@@ -64,7 +66,7 @@ export async function placeOrderForTable(
         const isUniqueConflict =
           err instanceof Error && "code" in err && (err as { code?: string }).code === "P2002";
         if (!isUniqueConflict) throw err;
-        const winner = await prisma.table_sessions.findFirst({
+        const winner = await db.table_sessions.findFirst({
           where: { table_id: table.id, closed_at: null },
         });
         sessionId = winner?.id ?? null;
@@ -73,7 +75,7 @@ export async function placeOrderForTable(
   }
 
   const dishIds = lines.map((l) => l.itemId);
-  const dishes = await prisma.menu_items.findMany({
+  const dishes = await db.menu_items.findMany({
     where: {
       id: { in: dishIds },
       platform_id: platformId,
@@ -86,7 +88,8 @@ export async function placeOrderForTable(
   const resolvedLines = lines
     .map((line) => {
       const dish = dishById.get(line.itemId);
-      if (!dish || typeof line.qty !== "number" || line.qty <= 0) return null;
+      // A quantity is a whole number from 1; anything else drops the line.
+      if (!dish || !isCount(line.qty)) return null;
       return {
         item_id: dish.id,
         name: dish.name,
@@ -105,7 +108,7 @@ export async function placeOrderForTable(
 
   // Snapshot the platform's current tax rate onto the order at creation time —
   // a later change in Settings must never alter how a past order displays.
-  const preferences = await prisma.platform_preferences.findUnique({
+  const preferences = await db.platform_preferences.findUnique({
     where: { platform_id: platformId },
   });
   const taxRate = preferences?.common_tax_rate ?? 0;
@@ -116,7 +119,7 @@ export async function placeOrderForTable(
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
-      const order = await prisma.$transaction(async (tx) => {
+      const order = await db.$transaction(async (tx) => {
         // Aggregate in the database — loading every code to find the max gets
         // slow once a platform has a large order history.
         const [{ max }] = await tx.$queryRaw<{ max: bigint | null }[]>`

@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import prisma from "../config/prisma";
+import { tenantDb } from "../config/tenant-db";
+import { publicPusherConfig } from "../lib/platform-connections";
+import { readProfile } from "../lib/business-profile";
 import { bestSellerIds } from "../lib/best-sellers";
 import { OrderPlacementError, placeOrderForTable } from "../lib/order-placement";
 import { verifyTableToken } from "../lib/table-token";
@@ -19,13 +22,14 @@ export async function getPublicMenu(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(platformId);
 
-  const categories = await prisma.menu_categories.findMany({
+  const categories = await db.menu_categories.findMany({
     where: { platform_id: platformId, is_active: true },
     orderBy: { name: "asc" },
   });
 
-  const dishes = await prisma.menu_items.findMany({
+  const dishes = await db.menu_items.findMany({
     where: {
       platform_id: platformId,
       status: { in: ["valid", "sold_out"] },
@@ -48,8 +52,9 @@ export async function getPublicTables(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(platformId);
 
-  const tables = await prisma.tables.findMany({
+  const tables = await db.tables.findMany({
     where: { platform_id: platformId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
@@ -62,19 +67,23 @@ export async function getPublicSettings(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(platformId);
 
-  const preferences = await prisma.platform_preferences.findUnique({
-    where: { platform_id: platformId },
-  });
+  const [preferences, pusher, profile] = await Promise.all([
+    db.platform_preferences.findUnique({ where: { platform_id: platformId } }),
+    publicPusherConfig(platformId),
+    readProfile(platformId),
+  ]);
 
   return res.status(200).json({
     settings: {
       name: platform.name,
-      address: platform.address,
-      phone: platform.phone,
-      logoUrl: platform.logo_url,
+      address: profile.address,
+      phone: profile.phone,
+      logoUrl: profile.logo_url,
       currency: toSymbol(preferences?.currency ?? DEFAULT_CURRENCY_SYMBOL),
       taxRate: preferences?.common_tax_rate ?? 0,
+      pusher,
     },
   });
 }
@@ -86,8 +95,9 @@ export async function resolveTableQrToken(req: Request, res: Response) {
 
   const platform = await loadActivePlatformOrNull(payload.platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(payload.platformId);
 
-  const table = await prisma.tables.findFirst({
+  const table = await db.tables.findFirst({
     where: { id: payload.tableId, platform_id: payload.platformId },
     select: { id: true, name: true },
   });
@@ -104,13 +114,14 @@ export async function getPublicTableOrders(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(platformId);
 
   const { table: tableName } = req.query;
   if (typeof tableName !== "string" || !tableName.trim()) {
     return res.status(400).json({ error: "table is required" });
   }
 
-  const table = await prisma.tables.findFirst({
+  const table = await db.tables.findFirst({
     where: { platform_id: platformId, name: tableName.trim() },
   });
   if (!table) return res.status(200).json({ orders: [] });
@@ -118,7 +129,7 @@ export async function getPublicTableOrders(req: Request, res: Response) {
   // Only orders still open for this table — once staff checks out, closed_ts is
   // set and the order stops being visible here, so a newly-seated guest never
   // sees what a previous party at the same table ordered.
-  const orders = await prisma.orders.findMany({
+  const orders = await db.orders.findMany({
     where: { platform_id: platformId, table_id: table.id, closed_ts: null },
     include: { order_lines: true },
     orderBy: { ts: "desc" },
@@ -150,6 +161,7 @@ export async function createTableRequest(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
+  const db = await tenantDb(platformId);
 
   const { tableName, type } = req.body ?? {};
   if (typeof tableName !== "string" || !tableName.trim()) {
@@ -159,17 +171,17 @@ export async function createTableRequest(req: Request, res: Response) {
     return res.status(400).json({ error: "type must be call_staff or checkout" });
   }
 
-  const table = await prisma.tables.findFirst({
+  const table = await db.tables.findFirst({
     where: { platform_id: platformId, name: tableName.trim() },
   });
   if (!table) return res.status(400).json({ error: "Unknown table" });
 
-  const existing = await prisma.table_requests.findFirst({
+  const existing = await db.table_requests.findFirst({
     where: { platform_id: platformId, table_id: table.id, type, status: "pending" },
   });
   if (existing) return res.status(200).json({ request: existing });
 
-  const request = await prisma.table_requests.create({
+  const request = await db.table_requests.create({
     data: {
       platform_id: platformId,
       table_id: table.id,

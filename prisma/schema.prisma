@@ -23,8 +23,22 @@ model User {
   created_at     DateTime        @default(now()) @db.Timestamptz(6)
   updated_at     DateTime        @default(now()) @db.Timestamptz(6)
   platform_users platform_users?
+  account_approval account_approvals?
 
   @@map("users")
+}
+
+/// Central database only. A new owner account waiting for review, created at
+/// signup while REQUIRE_ACCOUNT_APPROVAL=true (src/lib/account-approval.ts).
+/// No row means approved (accounts from before, staff). Approve an account by
+/// setting `status` to "approved", e.g. in Prisma Studio.
+model account_approvals {
+  user_id    String   @id @db.Uuid
+  /// "pending" or "approved"
+  status     String   @default("pending") @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_account_approval_user")
 }
 
 model menu_categories {
@@ -124,6 +138,8 @@ model platforms {
   bookings             bookings[]
   table_requests       table_requests[]
   table_sessions       table_sessions[]
+  platform_connections platform_connections?
+  staff_directory      staff_directory[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -250,4 +266,48 @@ model table_requests {
   tables    tables?   @relation(fields: [table_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_table_request_table")
 
   @@index([platform_id, status, created_at], map: "idx_table_request_queue")
+}
+
+/// A business's own infrastructure (central database only). Secrets are
+/// AES-256-GCM encrypted with CREDENTIALS_KEY (src/lib/crypto.ts) and never
+/// returned by the API. No row, or null columns, means the business uses the
+/// shared DATABASE_URL / PUSHER_* / BLOB_READ_WRITE_TOKEN from the environment.
+model platform_connections {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform_id          String    @unique @db.Uuid
+  database_url_enc     String?
+  /// "host/database" shown to the owner; never contains the password.
+  database_label       String?   @db.VarChar(255)
+  database_verified_at DateTime? @db.Timestamptz(6)
+  schema_version       Int?
+  pusher_app_id        String?   @db.VarChar(50)
+  pusher_key           String?   @db.VarChar(100)
+  pusher_cluster       String?   @db.VarChar(30)
+  pusher_secret_enc    String?
+  pusher_verified_at   DateTime? @db.Timestamptz(6)
+  /// "vercel_blob" or "s3"
+  storage_provider     String?   @db.VarChar(20)
+  /// e.g. "Vercel Blob · store abc" or "bucket · host", shown to the owner.
+  storage_label        String?   @db.VarChar(255)
+  /// The whole StorageConfig (src/lib/connection-input.ts) as encrypted JSON.
+  storage_config_enc   String?
+  storage_verified_at  DateTime? @db.Timestamptz(6)
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime  @default(now()) @db.Timestamptz(6)
+  platforms            platforms @relation(fields: [platform_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_connection_platform")
+}
+
+/// Central database only. Finds which business's own database holds a staff
+/// account, for staff of businesses that connected one (their password hash,
+/// name, role and active flag live there, in `users` / `platform_users`).
+/// Owners, and staff of businesses on the shared database, are in `users`.
+model staff_directory {
+  /// Lowercased; unique across every business and the central `users`.
+  email       String    @id @db.VarChar(255)
+  user_id     String    @unique @db.Uuid
+  platform_id String    @db.Uuid
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  platforms   platforms @relation(fields: [platform_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_staff_directory_platform")
+
+  @@index([platform_id], map: "idx_staff_directory_platform")
 }

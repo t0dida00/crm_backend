@@ -8,6 +8,7 @@ import prisma from '../../src/config/prisma';
 jest.mock('../../src/config/prisma', () => ({
   __esModule: true,
   default: {
+    staff_directory: { findUnique: jest.fn() },
     user: {
       findFirst: jest.fn(),
     },
@@ -17,6 +18,10 @@ jest.mock('../../src/config/prisma', () => ({
   },
 }));
 
+// No business in these tests has its own database.
+jest.mock('../../src/lib/platform-connections', () => ({
+  getConnection: async () => ({ databaseUrl: null, pusher: null }),
+}));
 jest.mock('bcrypt');
 jest.mock('jsonwebtoken');
 
@@ -171,7 +176,8 @@ describe('Auth Controller - Intensive Tests', () => {
       await login(mockRequest as Request, mockResponse as Response);
 
       expect(prisma.user.findFirst).toHaveBeenCalledWith({
-        where: { email: { equals: 'Test@Example.COM', mode: 'insensitive' } },
+        // Lowercased first (so it also matches the staff directory), still case-insensitive.
+        where: { email: { equals: 'test@example.com', mode: 'insensitive' } },
       });
     });
 
