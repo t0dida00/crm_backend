@@ -168,6 +168,7 @@ Both need:
 | `BLOB_READ_WRITE_TOKEN` | The shared Vercel Blob store for dish photos and logos, used by businesses that haven't connected their own storage. Without it, those businesses can't upload images |
 | `CREDENTIALS_KEY` | Encrypts the database URLs, Pusher secrets and storage keys businesses connect. 64 hex chars (`openssl rand -hex 32`). **Every server using the same central database needs the same key** (Vercel and `.env.development` included), and changing it makes saved credentials unreadable. Without it, businesses can't connect their own services |
 | `ALLOW_SHARED_INFRA` | `true` (default): a business without its own database/Pusher/storage uses the shared ones above. `false`: each business must connect all three before it can use the app |
+| `REQUIRE_ACCOUNT_APPROVAL` | `true`: new owner accounts wait for review and can't sign in until approved (see Auth model). Unset or `false` (default): they sign in right away, and accounts still waiting are let in too |
 
 `npm run prisma:seed` always seeds the platform types. It creates the demo
 login `admin@example.com` / `password123` only when `SEED_DEMO=1` (Docker
@@ -203,6 +204,8 @@ src/
     best-sellers.ts        bestSellerIds() — the top 5 dishes by sold_count,
                            flagged on the guest menu
     crypto.ts              AES-256-GCM encrypt/decrypt with CREDENTIALS_KEY
+    account-approval.ts    REQUIRE_ACCOUNT_APPROVAL: is a new owner account
+                           still waiting for review?
     connection-input.ts    checks a business's database URL / Pusher credentials /
                            storage config
     storage.ts             uploads to Vercel Blob or S3-compatible storage,
@@ -317,7 +320,15 @@ Two trust levels, both hitting the same controllers/data where relevant:
 1. **Staff/admin** (`requireAuth` middleware): owners create an account with
    `POST /auth/register` (`fullName`, `email`, `password` of 8+ characters),
    then `POST /platforms` makes them the new business's OWNER. `POST /auth/login` with
-   email+password returns a JWT (`sub` = user id). Every other non-public
+   email+password returns a JWT (`sub` = user id).
+   With `REQUIRE_ACCOUNT_APPROVAL=true`, register answers `pendingApproval: true`
+   and no token, and records the account in the central `account_approvals`
+   table (`status: "pending"`). Login then answers 403 `ACCOUNT_PENDING_APPROVAL`
+   (after the password check) until you approve it by setting `status` to
+   `"approved"`, e.g. in `npm run prisma:studio`. Accounts without a row
+   (everyone from before, and all staff) are approved. The table is separate
+   from `users` because business databases also have a `users` table and don't
+   upgrade themselves. Every other non-public
    route requires `Authorization: Bearer <token>`; `resolvePlatformId(userId)`
    then scopes all reads/writes to that user's one platform.
 2. **Guest/public** (`/platforms/:platformId/...` routes in

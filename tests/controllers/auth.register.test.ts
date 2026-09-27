@@ -72,7 +72,39 @@ describe('register', () => {
     expect(status).toHaveBeenCalledWith(201);
     expect(json).toHaveBeenCalledWith({
       token: 'token-1',
+      pendingApproval: false,
       user: { id: 'u1', email: 'ana@example.com', full_name: 'Ana Ruiz', role: null },
+    });
+  });
+
+  describe('with REQUIRE_ACCOUNT_APPROVAL=true', () => {
+    beforeEach(() => {
+      process.env.REQUIRE_ACCOUNT_APPROVAL = 'true';
+    });
+    afterEach(() => {
+      delete process.env.REQUIRE_ACCOUNT_APPROVAL;
+    });
+
+    test('creates the account waiting for review, without signing it in', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({ id: 'u1', email: 'ana@example.com', full_name: 'Ana Ruiz' });
+
+      await call(valid);
+
+      expect(mockPrisma.user.create).toHaveBeenCalledWith({
+        data: {
+          email: 'ana@example.com',
+          password_hash: 'hashed',
+          full_name: 'Ana Ruiz',
+          account_approval: { create: {} },
+        },
+      });
+      expect(jwt.sign).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(201);
+      expect(json).toHaveBeenCalledWith({
+        pendingApproval: true,
+        user: { id: 'u1', email: 'ana@example.com', full_name: 'Ana Ruiz', role: null },
+      });
     });
   });
 });

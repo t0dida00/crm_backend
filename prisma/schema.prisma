@@ -23,8 +23,22 @@ model User {
   created_at     DateTime        @default(now()) @db.Timestamptz(6)
   updated_at     DateTime        @default(now()) @db.Timestamptz(6)
   platform_users platform_users?
+  account_approval account_approvals?
 
   @@map("users")
+}
+
+/// Central database only. A new owner account waiting for review, created at
+/// signup while REQUIRE_ACCOUNT_APPROVAL=true (src/lib/account-approval.ts).
+/// No row means approved (accounts from before, staff). Approve an account by
+/// setting `status` to "approved", e.g. in Prisma Studio.
+model account_approvals {
+  user_id    String   @id @db.Uuid
+  /// "pending" or "approved"
+  status     String   @default("pending") @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_account_approval_user")
 }
 
 model menu_categories {

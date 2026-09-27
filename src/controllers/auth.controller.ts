@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import prisma from "../config/prisma";
 import { checkEmailAvailable, findAccountByEmail, findMembership } from "../lib/accounts";
+import { approvalRequired, isPendingApproval } from "../lib/account-approval";
 import { isFullName } from "../lib/validation";
 
 const JWT_SECRET = process.env.JWT_SECRET as string;
@@ -33,6 +34,14 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
+  // Owners live in the central database; staff in a business's own never need review.
+  if (account?.db === prisma && (await isPendingApproval(user.id))) {
+    return res.status(403).json({
+      error: "ACCOUNT_PENDING_APPROVAL",
+      message: "Your account is being reviewed. We'll let you know by email once it's approved.",
+    });
+  }
+
   const membership = await findMembership(user.id);
 
   // A membership that exists but is inactive means an owner disabled this
@@ -58,7 +67,9 @@ export async function login(req: Request, res: Response) {
 
 /**
  * Creates an owner-to-be account and signs it in. The new user has no
- * platform yet: creating one (`POST /platforms`) makes them its OWNER.
+ * platform yet: creating one (`POST /platforms`) makes them its OWNER. While
+ * REQUIRE_ACCOUNT_APPROVAL=true the account waits for review instead: it gets
+ * a pending `account_approvals` row, no token, and `pendingApproval: true`.
  */
 export async function register(req: Request, res: Response) {
   const { fullName, email, password } = req.body ?? {};
@@ -81,16 +92,17 @@ export async function register(req: Request, res: Response) {
     return res.status(409).json({ error: "An account with this email already exists" });
   }
 
+  const pendingApproval = approvalRequired();
   const user = await prisma.user.create({
     data: {
       email: normalizedEmail,
       password_hash: await bcrypt.hash(password, 10),
       full_name: fullName.trim(),
+      ...(pendingApproval ? { account_approval: { create: {} } } : {}),
     },
   });
 
-  return res.status(201).json({
-    token: signToken(user, null),
-    user: { id: user.id, email: user.email, full_name: user.full_name, role: null },
-  });
+  const publicUser = { id: user.id, email: user.email, full_name: user.full_name, role: null };
+  if (pendingApproval) return res.status(201).json({ pendingApproval: true, user: publicUser });
+  return res.status(201).json({ token: signToken(user, null), pendingApproval: false, user: publicUser });
 }
