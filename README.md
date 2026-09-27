@@ -320,7 +320,11 @@ Two trust levels, both hitting the same controllers/data where relevant:
 1. **Staff/admin** (`requireAuth` middleware): owners create an account with
    `POST /auth/register` (`fullName`, `email`, `password` of 8+ characters),
    then `POST /platforms` makes them the new business's OWNER. `POST /auth/login` with
-   email+password returns a JWT (`sub` = user id).
+   email+password returns a JWT (`sub` = user id). The sign-in page also sends
+   `signInAs` (`"owner"` or `"staff"`); an account of the other kind (owners
+   include new ones without a business) gets the same 401 as a wrong password,
+   checked right after the password so no other answer (disabled, pending)
+   leaks. Without `signInAs`, nothing extra is checked.
    With `REQUIRE_ACCOUNT_APPROVAL=true`, register answers `pendingApproval: true`
    and no token, and records the account in the central `account_approvals`
    table (`status: "pending"`). Login then answers 403 `ACCOUNT_PENDING_APPROVAL`
