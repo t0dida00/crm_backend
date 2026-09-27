@@ -1,10 +1,11 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { del, put } from "@vercel/blob";
 import { ConnectionInputError, type S3StorageConfig, type StorageConfig } from "./connection-input";
 
 export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Under Vercel's 4.5 MB request-body limit (uploads pass through a function). */
+export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const CHECK_TIMEOUT_MS = 10_000;
 
 /** The shared Vercel Blob store, for businesses that haven't connected their own. */
@@ -19,14 +20,25 @@ export function imageKey(filename: string | undefined, now = Date.now()): string
   return `dishes/${now}-${name || "upload"}`;
 }
 
-const s3Client = (c: S3StorageConfig) =>
-  new S3Client({
-    endpoint: c.endpoint,
-    region: c.region,
-    credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey },
-    // Most S3-compatible services (MinIO, R2, B2) expect bucket-in-path URLs.
-    forcePathStyle: true,
-  });
+// One client per storage account, reused across uploads on this instance
+// (like the Pusher clients). New keys give a new client.
+const s3Clients = new Map<string, S3Client>();
+
+function s3Client(c: S3StorageConfig): S3Client {
+  const id = [c.endpoint, c.region, c.accessKeyId, createHash("sha256").update(c.secretAccessKey).digest("hex")].join("|");
+  let client = s3Clients.get(id);
+  if (!client) {
+    client = new S3Client({
+      endpoint: c.endpoint,
+      region: c.region,
+      credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey },
+      // Most S3-compatible services (MinIO, R2, B2) expect bucket-in-path URLs.
+      forcePathStyle: true,
+    });
+    s3Clients.set(id, client);
+  }
+  return client;
+}
 
 /** Stores a public file and returns its URL. */
 export async function uploadObject(config: StorageConfig, key: string, body: Buffer, contentType: string): Promise<string> {
@@ -64,7 +76,8 @@ export function describeStorageError(err: unknown): string {
       return "that Vercel Blob store doesn't exist";
   }
   if (e?.$metadata?.httpStatusCode) return `the storage service answered ${e.$metadata.httpStatusCode}${e.name ? ` (${e.name})` : ""}`;
-  return e?.message || "unknown error";
+  // Anything else stays in the server log: raw SDK messages can name internal hosts.
+  return "the storage service refused the request";
 }
 
 /**

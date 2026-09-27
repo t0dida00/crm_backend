@@ -204,6 +204,8 @@ src/
     best-sellers.ts        bestSellerIds() — the top 5 dishes by sold_count,
                            flagged on the guest menu
     crypto.ts              AES-256-GCM encrypt/decrypt with CREDENTIALS_KEY
+    (middleware/require-owner.ts: requireOwner, after requireAuth, on the
+                           admin app's writes and revenue stats; see api.md)
     account-approval.ts    REQUIRE_ACCOUNT_APPROVAL: is a new owner account
                            still waiting for review?
     connection-input.ts    checks a business's database URL / Pusher credentials /
@@ -285,7 +287,7 @@ business exists, or Settings → Connections), through these OWNER-only routes:
 | `POST /platforms/me/connections/check` (same body as PUT) | Runs every PUT check (Pusher, storage's test file, database connects and is empty, or already this business's) but saves and sets up nothing. Also open to a signed-in owner with **no business yet**: onboarding asks for connections before the business details. `GET /platforms/me/connections` answers such a user too (nothing connected, plus the server's options) |
 
 Images are uploaded with `POST /platforms/me/uploads` (any member; raw PNG,
-JPEG, WEBP or GIF body up to 5 MB, file name in `X-Filename`), which answers
+JPEG, WEBP or GIF body up to 4 MB (under Vercel's 4.5 MB request limit), file name in `X-Filename`), which answers
 `{ url }`. It uses the business's own storage, else the shared
 `BLOB_READ_WRITE_TOKEN` store (409 when `ALLOW_SHARED_INFRA=false`).
 
@@ -361,10 +363,10 @@ Events currently published:
 
 | Event | Emitted from |
 |---|---|
-| `order:created` | `order-placement.ts` (both staff and guest order creation) |
+| `order:created` | `order-placement.ts` (both staff and guest order creation). Payloads carry the full order with `order_lines`: staff screens apply them as they are |
 | `order:updated` | status change, line added, line qty changed |
 | `order:deleted` | order deleted |
-| `table:updated` | seat / free |
+| `table:updated` | seat / free, and an order that seats its table (staff screens apply payloads instead of refetching, so this must be sent) |
 | `table:checked_out` | checkout (bulk-closes orders; listeners should refetch rather than expect a per-order payload) |
 | `table_request:created` | guest raises a call-staff/checkout request |
 | `table_request:resolved` | staff resolves a request |

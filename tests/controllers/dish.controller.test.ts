@@ -8,7 +8,11 @@ jest.mock('../../src/config/prisma', () => ({
 jest.mock('../../src/config/tenant-db', () => ({
   tenantDb: async () => jest.requireMock('../../src/config/prisma').default,
 }));
-jest.mock('../../src/lib/platform-context', () => ({ resolvePlatformId: async () => 'p1' }));
+const mockMembership = { platformId: 'p1', role: 'OWNER' };
+jest.mock('../../src/lib/platform-context', () => ({
+  resolvePlatformId: async () => 'p1',
+  resolvePlatformMembership: async () => mockMembership,
+}));
 
 import { Response } from 'express';
 import prisma from '../../src/config/prisma';
@@ -62,5 +66,25 @@ describe('dish validation', () => {
     expect((await call(updateDish, { categoryId: null })).body).toEqual({ error: 'category is required' });
     expect((await call(updateDish, { price: -2 })).status).toBe(400);
     expect(db.menu_items.update).not.toHaveBeenCalled();
+  });
+
+  describe('staff', () => {
+    beforeEach(() => {
+      mockMembership.role = 'STAFF';
+      db.menu_items.update.mockImplementation(async ({ data }) => ({ id: 'd1', ...data }));
+    });
+    afterEach(() => {
+      mockMembership.role = 'OWNER';
+    });
+
+    it('can only change the status: price, name and the rest are ignored', async () => {
+      await call(updateDish, { status: 'sold_out', price: 0, name: 'Free!', taxPct: 0 });
+      expect(db.menu_items.update).toHaveBeenCalledTimes(1);
+      const { data } = db.menu_items.update.mock.calls[0][0];
+      expect(data.status).toBe('sold_out');
+      expect(data).not.toHaveProperty('price');
+      expect(data).not.toHaveProperty('name');
+      expect(data).not.toHaveProperty('tax_pct');
+    });
   });
 });

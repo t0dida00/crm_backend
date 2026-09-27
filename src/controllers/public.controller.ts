@@ -18,14 +18,32 @@ async function loadActivePlatformOrNull(platformId: string) {
   return platform;
 }
 
+/** The dish fields a guest sees, plus sold_count, used only to pick best sellers (stripped below). */
+const GUEST_DISH_FIELDS = {
+  id: true,
+  name: true,
+  price: true,
+  category_id: true,
+  description: true,
+  tax_mode: true,
+  tax_name: true,
+  tax_pct: true,
+  status: true,
+  is_vegan: true,
+  image_url: true,
+  sold_count: true,
+} as const;
+
 export async function getPublicMenu(req: Request, res: Response) {
   const { platformId } = req.params;
   const platform = await loadActivePlatformOrNull(platformId);
   if (!platform) return res.status(404).json({ error: "Platform not found" });
   const db = await tenantDb(platformId);
 
+  // Only what the guest menu shows: never whole rows (notes, timestamps, platform ids).
   const categories = await db.menu_categories.findMany({
     where: { platform_id: platformId, is_active: true },
+    select: { id: true, name: true, is_active: true },
     orderBy: { name: "asc" },
   });
 
@@ -35,6 +53,7 @@ export async function getPublicMenu(req: Request, res: Response) {
       status: { in: ["valid", "sold_out"] },
       category_id: { in: categories.map((c) => c.id) },
     },
+    select: GUEST_DISH_FIELDS,
     orderBy: { name: "asc" },
   });
 
