@@ -25,8 +25,10 @@ Requires Docker (Docker Desktop on macOS/Windows).
 git clone https://github.com/t0dida00/crm_backend.git
 cd crm_backend
 
+echo "CREDENTIALS_KEY=$(openssl rand -hex 32)" >> .env   # first run only (see below)
+
 docker compose up -d --build        # starts Postgres (port 5432) and the API (port 3000)
-docker compose run --rm setup       # first run only: creates the tables and seeds data
+docker compose run --rm --build setup   # first run, and after schema changes: creates/syncs the tables and seeds data
 docker compose run --rm setup sh -c "npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260926180000_dish_sold_count/migration.sql && echo 'CREATE UNIQUE INDEX IF NOT EXISTS \"one_open_session_per_table\" ON \"table_sessions\" (\"table_id\") WHERE \"closed_at\" IS NULL;' | npx prisma db execute --schema prisma/schema.prisma --stdin"
                                     # first run only: adds what db push skips (see below)
 
@@ -41,9 +43,21 @@ docker compose down                 # stop (data is kept in the pgdata volume)
 docker compose down -v              # stop and wipe the database
 ```
 
-`JWT_SECRET` and the `PUSHER_*` variables can be overridden from your shell
-or a `.env` file next to `docker-compose.yml`. Without Pusher credentials the
-API still works; real-time events are simply not published.
+`JWT_SECRET`, `CREDENTIALS_KEY` and the `PUSHER_*` variables are read from
+your shell or a `.env` file next to `docker-compose.yml` (git-ignored). Without
+Pusher credentials the API still works; real-time events are simply not
+published.
+
+`CREDENTIALS_KEY` has no default: without it, connecting a business's own
+database, Pusher or storage answers "The server can't store credentials yet".
+Generate it once with the `echo … >> .env` line above and keep it: changing it
+makes credentials already saved unreadable. After editing `.env`, apply it with
+`docker compose up -d` (recreates the API container).
+
+Keep `--build` on `setup`: its image carries its own copy of
+`prisma/schema.prisma`, so without a rebuild it keeps pushing an old schema
+and the API fails with errors like `The table public.staff_directory does not
+exist in the current database`.
 
 To build and run just the API image against an existing database:
 
@@ -52,6 +66,7 @@ docker build -t crm-backend .
 docker run -p 3000:3000 \
   -e DATABASE_URL="postgresql://USER:PASSWORD@host.docker.internal:5432/crm_platform?schema=public" \
   -e JWT_SECRET="change-me" \
+  -e CREDENTIALS_KEY="<64 hex chars: openssl rand -hex 32>" \
   crm-backend
 ```
 
