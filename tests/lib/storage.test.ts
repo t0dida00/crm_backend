@@ -64,6 +64,10 @@ describe('uploadObject', () => {
     expect(S3Client).toHaveBeenCalledWith(
       expect.objectContaining({ endpoint: S3.endpoint, region: 'auto', forcePathStyle: true }),
     );
+    // Reused for the next upload to the same account.
+    const created = (S3Client as unknown as jest.Mock).mock.calls.length;
+    await uploadObject(S3, 'dishes/2-b.png', Buffer.from('img'), 'image/png');
+    expect((S3Client as unknown as jest.Mock).mock.calls.length).toBe(created);
     expect(send.mock.calls[0][0].input).toMatchObject({ Bucket: 'menu-photos', Key: 'dishes/1-a.png', ContentType: 'image/png' });
   });
 

@@ -25,8 +25,10 @@ Requires Docker (Docker Desktop on macOS/Windows).
 git clone https://github.com/t0dida00/crm_backend.git
 cd crm_backend
 
+echo "CREDENTIALS_KEY=$(openssl rand -hex 32)" >> .env   # first run only (see below)
+
 docker compose up -d --build        # starts Postgres (port 5432) and the API (port 3000)
-docker compose run --rm setup       # first run only: creates the tables and seeds data
+docker compose run --rm --build setup   # first run, and after schema changes: creates/syncs the tables and seeds data
 docker compose run --rm setup sh -c "npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260926180000_dish_sold_count/migration.sql && echo 'CREATE UNIQUE INDEX IF NOT EXISTS \"one_open_session_per_table\" ON \"table_sessions\" (\"table_id\") WHERE \"closed_at\" IS NULL;' | npx prisma db execute --schema prisma/schema.prisma --stdin"
                                     # first run only: adds what db push skips (see below)
 
@@ -41,9 +43,21 @@ docker compose down                 # stop (data is kept in the pgdata volume)
 docker compose down -v              # stop and wipe the database
 ```
 
-`JWT_SECRET` and the `PUSHER_*` variables can be overridden from your shell
-or a `.env` file next to `docker-compose.yml`. Without Pusher credentials the
-API still works; real-time events are simply not published.
+`JWT_SECRET`, `CREDENTIALS_KEY` and the `PUSHER_*` variables are read from
+your shell or a `.env` file next to `docker-compose.yml` (git-ignored). Without
+Pusher credentials the API still works; real-time events are simply not
+published.
+
+`CREDENTIALS_KEY` has no default: without it, connecting a business's own
+database, Pusher or storage answers "The server can't store credentials yet".
+Generate it once with the `echo … >> .env` line above and keep it: changing it
+makes credentials already saved unreadable. After editing `.env`, apply it with
+`docker compose up -d` (recreates the API container).
+
+Keep `--build` on `setup`: its image carries its own copy of
+`prisma/schema.prisma`, so without a rebuild it keeps pushing an old schema
+and the API fails with errors like `The table public.staff_directory does not
+exist in the current database`.
 
 To build and run just the API image against an existing database:
 
@@ -52,6 +66,7 @@ docker build -t crm-backend .
 docker run -p 3000:3000 \
   -e DATABASE_URL="postgresql://USER:PASSWORD@host.docker.internal:5432/crm_platform?schema=public" \
   -e JWT_SECRET="change-me" \
+  -e CREDENTIALS_KEY="<64 hex chars: openssl rand -hex 32>" \
   crm-backend
 ```
 
@@ -204,6 +219,8 @@ src/
     best-sellers.ts        bestSellerIds() — the top 5 dishes by sold_count,
                            flagged on the guest menu
     crypto.ts              AES-256-GCM encrypt/decrypt with CREDENTIALS_KEY
+    (middleware/require-owner.ts: requireOwner, after requireAuth, on the
+                           admin app's writes and revenue stats; see api.md)
     account-approval.ts    REQUIRE_ACCOUNT_APPROVAL: is a new owner account
                            still waiting for review?
     connection-input.ts    checks a business's database URL / Pusher credentials /
@@ -285,7 +302,7 @@ business exists, or Settings → Connections), through these OWNER-only routes:
 | `POST /platforms/me/connections/check` (same body as PUT) | Runs every PUT check (Pusher, storage's test file, database connects and is empty, or already this business's) but saves and sets up nothing. Also open to a signed-in owner with **no business yet**: onboarding asks for connections before the business details. `GET /platforms/me/connections` answers such a user too (nothing connected, plus the server's options) |
 
 Images are uploaded with `POST /platforms/me/uploads` (any member; raw PNG,
-JPEG, WEBP or GIF body up to 5 MB, file name in `X-Filename`), which answers
+JPEG, WEBP or GIF body up to 4 MB (under Vercel's 4.5 MB request limit), file name in `X-Filename`), which answers
 `{ url }`. It uses the business's own storage, else the shared
 `BLOB_READ_WRITE_TOKEN` store (409 when `ALLOW_SHARED_INFRA=false`).
 
@@ -361,10 +378,10 @@ Events currently published:
 
 | Event | Emitted from |
 |---|---|
-| `order:created` | `order-placement.ts` (both staff and guest order creation) |
+| `order:created` | `order-placement.ts` (both staff and guest order creation). Payloads carry the full order with `order_lines`: staff screens apply them as they are |
 | `order:updated` | status change, line added, line qty changed |
 | `order:deleted` | order deleted |
-| `table:updated` | seat / free |
+| `table:updated` | seat / free, and an order that seats its table (staff screens apply payloads instead of refetching, so this must be sent) |
 | `table:checked_out` | checkout (bulk-closes orders; listeners should refetch rather than expect a per-order payload) |
 | `table_request:created` | guest raises a call-staff/checkout request |
 | `table_request:resolved` | staff resolves a request |

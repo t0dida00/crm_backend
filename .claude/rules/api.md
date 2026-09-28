@@ -1,6 +1,7 @@
 # Routing, input rules, real-time and errors
 
-- **Routing:** `src/app.ts` mounts every router at `/`, except `public.routes.ts` at `/public`. Routes are thin; authed routes add `requireAuth` per route, which verifies the Bearer JWT and sets `req.userId` (`AuthedRequest`).
+- **Routing:** `src/app.ts` mounts every router at `/`, except `public.routes.ts` at `/public`. Routes are thin; authed routes add `requireAuth` per route, which verifies the Bearer JWT and sets `req.userId` (`AuthedRequest`). It refuses tokens without a `sub` or with a `type` (table QR tokens share `JWT_SECRET`).
+- **Owner-only routes:** the admin app's writes and revenue stats add `requireOwner` after `requireAuth` (`middleware/require-owner.ts`): dish create/delete, categories, table create/edit/delete and QR tokens, settings and special taxes, `PATCH /platforms/me`, `/orders/stats*`. Staff keep orders, table seat/free/checkout, bookings, table requests and reads. `PATCH /dishes/:id` stays open to staff but applies only `status` for them. `tests/lib/require-owner.test.ts` lists the owner-only routes; add new admin routes there.
 - **Public/guest API:** `public.controller.ts` takes `platformId` from the URL with no auth. `table-token.ts` signs non-expiring QR tokens with `JWT_SECRET` and a `type: "table-qr"` claim so they can't be used as login tokens.
 - **Input rules:** `src/lib/validation.ts` (the frontend's `lib/validation.ts` mirrors it).
   - `isValidPhone`, `isValidEmail`, `isFullName`.

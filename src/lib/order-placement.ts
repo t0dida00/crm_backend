@@ -119,6 +119,8 @@ export async function placeOrderForTable(
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
+      // The table this order seats, if it wasn't seated yet: announced below.
+      let seatedTable: unknown = null;
       const order = await db.$transaction(async (tx) => {
         // Aggregate in the database — loading every code to find the max gets
         // slow once a platform has a large order history.
@@ -130,7 +132,7 @@ export async function placeOrderForTable(
         const maxNumber = Math.max(Number(max ?? 0), 2400);
 
         if (table && table.state !== "Seated") {
-          await tx.tables.update({
+          seatedTable = await tx.tables.update({
             where: { id: table.id },
             data: { state: "Seated", seated_at: new Date() },
           });
@@ -152,6 +154,8 @@ export async function placeOrderForTable(
         });
       }, { timeout: 15000 });
       await emitToPlatform(platformId, "order:created", { order });
+      // Staff screens apply events instead of refetching, so say the table is seated too.
+      if (seatedTable) await emitToPlatform(platformId, "table:updated", { table: seatedTable });
       return { order, created: true };
     } catch (err) {
       const isUniqueCodeConflict =

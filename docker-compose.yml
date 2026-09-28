@@ -27,6 +27,8 @@ services:
       PUSHER_KEY: ${PUSHER_KEY:-}
       PUSHER_SECRET: ${PUSHER_SECRET:-}
       PUSHER_CLUSTER: ${PUSHER_CLUSTER:-}
+      # Read from .env (git-ignored). Without it businesses can't connect their
+      # own services: echo "CREDENTIALS_KEY=$(openssl rand -hex 32)" >> .env
       CREDENTIALS_KEY: ${CREDENTIALS_KEY:-}
       ALLOW_SHARED_INFRA: ${ALLOW_SHARED_INFRA:-true}
     ports:
