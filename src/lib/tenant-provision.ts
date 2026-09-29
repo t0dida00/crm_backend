@@ -3,8 +3,9 @@ import Pusher from "pusher";
 import { TENANT_INIT_SQL } from "../generated/tenant-init-sql";
 import { ConnectionInputError, type PusherCredentials } from "./connection-input";
 
-/** Bump when TENANT_INIT_SQL changes in a way existing business databases need upgrading for. */
-export const TENANT_SCHEMA_VERSION = 1;
+import { TENANT_SCHEMA_VERSION } from "./tenant-upgrade";
+
+export { TENANT_SCHEMA_VERSION };
 
 const CONNECT_TIMEOUT_MS = 5000;
 

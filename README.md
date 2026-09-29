@@ -228,6 +228,8 @@ src/
     storage.ts             uploads to Vercel Blob or S3-compatible storage,
                            verifies a storage connection
     tenant-provision.ts    sets up a business's own database, verifies Pusher
+    tenant-upgrade.ts      TENANT_SCHEMA_VERSION and the upgrades that bring an
+                           existing business database up to it
     platform-connections.ts  a business's decrypted connections (cached 30 s)
   config/tenant-db.ts      tenantDb(platformId) — the Prisma client for that
                            business's data (its own database, or the shared one)
@@ -258,6 +260,10 @@ prisma/
 - **`platform_preferences`** — currency + common tax rate for a platform.
 - **`menu_categories`**, **`menu_items`** — the menu; a dish can carry its
   own special tax (`tax_mode: include|exclude`, `tax_name`, `tax_pct`).
+  `menu_categories.sort_order` is the owner's order (0 = first): every
+  category list uses it, then name (`CATEGORY_ORDER`). A new category goes to
+  the end; `PUT /categories/order { ids }` (owner) saves a whole new order and
+  must list each of the business's categories exactly once.
   `menu_items.sold_count` is the units ordered across all existing orders. A
   trigger on `order_lines` keeps it current: placing an order, changing a line
   and deleting an order all update it. Never write it from code. The guest
@@ -312,8 +318,12 @@ JPEG, WEBP or GIF body up to 4 MB (under Vercel's 4.5 MB request limit), file na
 - Setting up a database runs `src/generated/tenant-init-sql.ts` with the `pg`
   driver, because Vercel functions can't run the Prisma CLI. After changing
   `schema.prisma` or `prisma/tenant-extras.sql`, run `npm run tenant:sql`; a
-  test fails if it's out of date. Existing business databases don't upgrade
-  themselves yet: `tenant_meta.schema_version` records which version each has.
+  test fails if it's out of date. Existing business databases upgrade
+  themselves: the first `tenantDb()` for a database (once per instance) runs
+  the missing steps from `TENANT_UPGRADES` (`src/lib/tenant-upgrade.ts`) and
+  records each in `tenant_meta.schema_version`. A schema change that existing
+  databases need: bump `TENANT_SCHEMA_VERSION`, add idempotent statements for
+  it, and add the matching central migration.
 - Connecting a different database later doesn't move any data. Switching
   storage doesn't move images either: saved URLs keep pointing at the old one.
 - Storage endpoints and public URLs follow the same production rules as
