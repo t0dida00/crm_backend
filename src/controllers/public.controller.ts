@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import prisma from "../config/prisma";
 import { tenantDb } from "../config/tenant-db";
+import { CATEGORY_ORDER } from "./category.controller";
 import { publicPusherConfig } from "../lib/platform-connections";
 import { readProfile } from "../lib/business-profile";
 import { bestSellerIds } from "../lib/best-sellers";
@@ -44,7 +45,7 @@ export async function getPublicMenu(req: Request, res: Response) {
   const categories = await db.menu_categories.findMany({
     where: { platform_id: platformId, is_active: true },
     select: { id: true, name: true, is_active: true },
-    orderBy: { name: "asc" },
+    orderBy: CATEGORY_ORDER,
   });
 
   const dishes = await db.menu_items.findMany({

@@ -8,7 +8,14 @@ const platform = {
 };
 
 /** A pg Client stand-in: answers queries by matching SQL text. */
-function fakeClient(answers: { tables: number; owner?: string; failOn?: RegExp; connectError?: Error }) {
+function fakeClient(answers: {
+  tables: number;
+  owner?: string;
+  failOn?: RegExp;
+  connectError?: Error;
+  /** The database's server_encoding; UTF8 unless a test says otherwise. */
+  encoding?: string;
+}) {
   const queries: string[] = [];
   const client = {
     connect: jest.fn(async () => {
@@ -18,7 +25,9 @@ function fakeClient(answers: { tables: number; owner?: string; failOn?: RegExp; 
     query: jest.fn(async (sql: string, _params?: unknown[]) => {
       queries.push(sql);
       if (answers.failOn?.test(sql)) throw new Error('boom');
-      if (sql.includes('information_schema.tables')) return { rows: [{ count: String(answers.tables) }] };
+      if (sql.includes('information_schema.tables')) {
+        return { rows: [{ count: String(answers.tables), encoding: answers.encoding ?? 'UTF8' }] };
+      }
       if (sql.includes('FROM "tenant_meta"')) {
         if (answers.owner === undefined) throw new Error('relation "tenant_meta" does not exist');
         return { rows: [{ platform_id: answers.owner }] };
@@ -48,6 +57,14 @@ describe('provisionTenantDatabase', () => {
     await expect(provisionTenantDatabase('postgresql://x/db', platform, make)).resolves.toEqual({ created: false });
     expect(queries).not.toContain('BEGIN');
     expect(queries.some((q) => q.startsWith('UPDATE "platforms"'))).toBe(true);
+  });
+
+  it('refuses a database that is not UTF-8, before writing anything', async () => {
+    const { queries, make } = fakeClient({ tables: 0, encoding: 'LATIN1' });
+    await expect(provisionTenantDatabase('postgresql://x/db', platform, make)).rejects.toThrow(
+      /uses the LATIN1 encoding\. Tably needs UTF-8/,
+    );
+    expect(queries).not.toContain('BEGIN');
   });
 
   it("refuses another business's database", async () => {

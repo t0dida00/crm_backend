@@ -4,7 +4,13 @@ jest.mock('../../src/lib/platform-connections', () => ({
   sharedInfraAllowed: jest.fn(),
 }));
 jest.mock('@prisma/client', () => ({
-  PrismaClient: jest.fn().mockImplementation((opts) => ({ opts, $disconnect: jest.fn(async () => {}) })),
+  PrismaClient: jest.fn().mockImplementation((opts) => ({
+    opts,
+    $disconnect: jest.fn(async () => {}),
+    // Already at the current schema version: no upgrade to run.
+    $queryRawUnsafe: jest.fn(async () => [{ schema_version: 2 }]),
+    $executeRawUnsafe: jest.fn(async () => 0),
+  })),
 }));
 
 import prisma from '../../src/config/prisma';
@@ -33,6 +39,13 @@ describe('tenantDb', () => {
     const second = await tenantDb('p2');
     expect(second).toBe(first);
     expect(first.opts.datasources.db.url).toContain('connection_limit=1');
+  });
+
+  it('checks the business database schema once per client', async () => {
+    (getConnection as jest.Mock).mockResolvedValue({ databaseUrl: 'postgresql://u:p@db.example.com/cafe', pusher: null });
+    const client = (await tenantDb('p3')) as unknown as { $queryRawUnsafe: jest.Mock };
+    await tenantDb('p3');
+    expect(client.$queryRawUnsafe).toHaveBeenCalledTimes(1);
   });
 });
 
