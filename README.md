@@ -28,9 +28,8 @@ cd crm_backend
 echo "CREDENTIALS_KEY=$(openssl rand -hex 32)" >> .env   # first run only (see below)
 
 docker compose up -d --build        # starts Postgres (port 5432) and the API (port 3000)
-docker compose run --rm --build setup   # first run, and after schema changes: creates/syncs the tables and seeds data
-docker compose run --rm setup sh -c "npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260926180000_dish_sold_count/migration.sql && echo 'CREATE UNIQUE INDEX IF NOT EXISTS \"one_open_session_per_table\" ON \"table_sessions\" (\"table_id\") WHERE \"closed_at\" IS NULL;' | npx prisma db execute --schema prisma/schema.prisma --stdin"
-                                    # first run only: adds what db push skips (see below)
+docker compose run --rm --build setup   # first run, and after schema changes: creates/syncs the tables
+                                        # (plus the trigger and index db push skips) and seeds data
 
 curl http://localhost:3000/health   # → {"status":"ok"}
 ```
@@ -42,6 +41,10 @@ docker compose logs -f api          # follow API logs
 docker compose down                 # stop (data is kept in the pgdata volume)
 docker compose down -v              # stop and wipe the database
 ```
+
+The database is created as UTF-8 (`POSTGRES_INITDB_ARGS`). A volume made
+before that keeps its original encoding; if the API reports that it isn't
+UTF-8, recreate it with `docker compose down -v` and run `setup` again.
 
 `JWT_SECRET`, `CREDENTIALS_KEY` and the `PUSHER_*` variables are read from
 your shell or a `.env` file next to `docker-compose.yml` (git-ignored). Without
@@ -312,6 +315,8 @@ JPEG, WEBP or GIF body up to 4 MB (under Vercel's 4.5 MB request limit), file na
 `{ url }`. It uses the business's own storage, else the shared
 `BLOB_READ_WRITE_TOKEN` store (409 when `ALLOW_SHARED_INFRA=false`).
 
+- A business database must use the UTF8 encoding (names and menus can be in
+  any language, Vietnamese for example); the connection check refuses others.
 - In production a database URL must use SSL (`sslmode=require`) and must not
   resolve to a private or loopback address, so the API can't be pointed at
   machines on the host's own network. Locally, `localhost` is allowed.

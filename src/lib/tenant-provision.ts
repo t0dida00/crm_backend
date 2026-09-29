@@ -43,14 +43,21 @@ export async function testDatabase(url: string, makeClient = defaultClient): Pro
 
 /**
  * Whether a database can become this business's: "empty", or "ours" (this
- * business set it up before). Anything else throws, so a database with someone
+ * business set it up before). It must use UTF-8. Anything else throws, so a database with someone
  * else's tables is never written to. `platformId` is null before the business
  * exists, when only an empty database will do.
  */
 async function inspectDatabase(client: Client, platformId: string | null): Promise<"empty" | "ours"> {
-  const { rows } = await client.query<{ count: string }>(
-    "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+  const { rows } = await client.query<{ count: string; encoding: string }>(
+    "SELECT COUNT(*) AS count, current_setting('server_encoding') AS encoding FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
   );
+  // Names and menus can be in any language (Vietnamese, for example): a
+  // database in another encoding would reject or corrupt them.
+  if (rows[0]?.encoding !== "UTF8") {
+    throw new ConnectionInputError(
+      `This database uses the ${rows[0]?.encoding ?? "unknown"} encoding. Tably needs UTF-8: create the database with ENCODING 'UTF8' (the default on Neon, Supabase and Prisma Postgres) and connect that one.`,
+    );
+  }
   if (Number(rows[0]?.count ?? 0) === 0) return "empty";
   const owner = await client
     .query<{ platform_id: string }>('SELECT "platform_id" FROM "tenant_meta" LIMIT 1')

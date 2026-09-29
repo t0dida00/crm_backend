@@ -7,6 +7,9 @@ services:
       POSTGRES_USER: crm
       POSTGRES_PASSWORD: crm
       POSTGRES_DB: crm_platform
+      # UTF-8, so names and menus in any language (Vietnamese, for example)
+      # store correctly; the API refuses business databases in other encodings.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     ports:
       - "5432:5432"
     volumes:
@@ -38,7 +41,10 @@ services:
         condition: service_healthy
 
   # One-off: `docker compose run --rm setup` — pushes the Prisma schema to the
-  # database and seeds platform types + admin@example.com / password123.
+  # database (including menu_categories.sort_order), adds what `db push` can't
+  # (prisma/tenant-extras.sql: the sold_count trigger and the one-open-session
+  # index), and seeds platform types + admin@example.com / password123.
+  # Safe to run again on an existing volume.
   # Uses the build stage because the prisma CLI and tsx are devDependencies.
   setup:
     build:
@@ -47,7 +53,7 @@ services:
     environment:
       DATABASE_URL: postgresql://crm:crm@db:5432/crm_platform?schema=public
       SEED_DEMO: "1"
-    command: sh -c "npx prisma db push --skip-generate && npx prisma db seed"
+    command: sh -c "npx prisma db push --skip-generate && npx prisma db execute --file prisma/tenant-extras.sql --schema prisma/schema.prisma && npx prisma db seed"
     depends_on:
       db:
         condition: service_healthy
