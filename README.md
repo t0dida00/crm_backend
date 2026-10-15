@@ -1,5 +1,7 @@
 # CRM Backend
 
+[![Tably preview](docs/preview.png)](https://www.tably.click/)
+
 Express + Prisma + PostgreSQL API for a restaurant/cafe ordering and
 management platform. Serves the staff/admin app (`CRM` frontend) over an
 authenticated REST API, and serves guests scanning a table's QR code over a
